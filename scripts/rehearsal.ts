@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { chromium, type Page } from "playwright";
 import { admin as service } from "./lib/admin-client";
+import { requireDepartmentalFixtures } from "./lib/old-fixtures-guard";
 
 const BASE = process.argv[2] ?? "http://localhost:3000";
 const WIDTH = Number(process.argv[3] ?? 390);
@@ -31,6 +32,7 @@ async function until(fn: () => Promise<boolean>, ms = 8000): Promise<number> {
 }
 
 async function main() {
+  await requireDepartmentalFixtures("rehearsal");
   const email = `rehearsal-${randomBytes(4).toString("hex")}@example.invalid`;
   const password = randomBytes(18).toString("base64url");
   const created = await service.auth.admin.createUser({ email, password, email_confirm: true });

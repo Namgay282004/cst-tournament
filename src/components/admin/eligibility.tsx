@@ -7,7 +7,7 @@ import { useBanReason, useSuspended } from "./discipline-warnings";
 
 /**
  * Before kick-off: each team's players suspended for this match, with the reason
- * ("Sent off vs Zimdra FC, Mon 19 Oct"; "Yellow cards in two consecutive matches"). Hidden if none.
+ * ("Sent off vs GCBS FC, Tue 1 Dec"; "Second yellow card in different matches vs …"). Hidden if none.
  */
 export function EligibilitySection({ match }: { match: Match }) {
   const { teamsById, playersById } = useTournament();

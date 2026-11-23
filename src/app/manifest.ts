@@ -1,11 +1,12 @@
 import type { MetadataRoute } from "next";
+import { APP_SHORT_NAME, SITE_DESCRIPTION, TOURNAMENT_SHORT_NAME } from "@/lib/brand";
 
 // "Add to Home screen" icon and colours.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "CST Silver Jubilee Football",
-    short_name: "CST Football",
-    description: "Live scores, group tables and knockouts",
+    name: TOURNAMENT_SHORT_NAME,
+    short_name: APP_SHORT_NAME,
+    description: SITE_DESCRIPTION,
     start_url: "/",
     display: "standalone",
     background_color: "#f3f5f7",

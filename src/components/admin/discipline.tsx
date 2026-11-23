@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { teamShort } from "@/data/team-names";
 import { formatDay } from "@/lib/format";
-import { DISCIPLINE, eventMinuteLabel, isFinished, shirtLabel, type Player } from "@/lib/tournament";
+import { DISCIPLINE, disciplineRulesText, eventMinuteLabel, isFinished, shirtLabel, type Player } from "@/lib/tournament";
 import { CardIcon, ChevronIcon } from "../icons";
 import { useTournament } from "../tournament-provider";
 import { useBanReason } from "./discipline-warnings";
@@ -15,6 +15,7 @@ import { useBanReason } from "./discipline-warnings";
 export function DisciplineView() {
   const { discipline, playersById, teamsById, matchesById, matches } = useTournament();
   const reason = useBanReason();
+  const rulesText = disciplineRulesText();
   const name = (id: string) => {
     const p: Player | undefined = playersById.get(id);
     return p ? `${p.shirt_number != null ? `#${shirtLabel(p.shirt_number)} ` : ""}${p.name}` : "Removed player";
@@ -37,11 +38,16 @@ export function DisciplineView() {
       </div>
       <header className="px-1">
         <h1 className="font-display text-2xl font-bold">Discipline</h1>
-        <p className="text-sm text-muted">
-          Rules confirmed by the organisers: two yellows in a match or a red card, banned for the team&apos;s next match; a yellow in two
-          of the team&apos;s consecutive matches, banned for the next. Yellow cards never reset. A ban is served when the team&apos;s next match
-          is played. Longer bans for serious red cards are the organisers&apos; decision and aren&apos;t counted here.
-        </p>
+        <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-muted">
+          {rulesText.rules.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+        {rulesText.pending.map((line) => (
+          <p key={line} className="mt-2 rounded-lg border-l-4 border-text bg-card px-3 py-2 text-sm font-medium ring-1 ring-border/60">
+            To confirm: {line}
+          </p>
+        ))}
       </header>
 
       {discipline.unattributed.length > 0 && (
@@ -100,7 +106,10 @@ export function DisciplineView() {
                 <span className="block font-semibold">
                   {name(playerId)} ({team(a.teamId)})
                 </span>
-                <span className="block text-muted">Yellow vs {opponent(a.matchId, a.teamId)}: a yellow in the team&apos;s next match means a ban.</span>
+                <span className="block text-muted">
+                  Yellow vs {opponent(a.matchId, a.teamId)}:{" "}
+                  {DISCIPLINE.YELLOW_RULE === "accumulated" ? "one more yellow means a ban." : "a yellow in the team\u2019s next match means a ban."}
+                </span>
               </li>
             ))}
           </ul>
@@ -143,8 +152,8 @@ export function DisciplineView() {
         )}
       </section>
       <p className="px-1 text-xs text-muted">
-        Counted from finished matches. Ban lengths: second yellow {DISCIPLINE.SECOND_YELLOW_BAN_MATCHES}, red card {DISCIPLINE.RED_BAN_MATCHES}, consecutive
-        yellows {DISCIPLINE.YELLOW_BAN_MATCHES} match.
+        Counted from finished matches. Ban lengths: second yellow {DISCIPLINE.SECOND_YELLOW_BAN_MATCHES}, red card {DISCIPLINE.RED_BAN_MATCHES},{" "}
+        {DISCIPLINE.YELLOW_RULE === "accumulated" ? "accumulated" : "consecutive"} yellows {DISCIPLINE.YELLOW_BAN_MATCHES} match.
       </p>
     </main>
   );

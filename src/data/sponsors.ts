@@ -5,7 +5,8 @@
  */
 export type Sponsor = { name: string; file: string; order: number; website?: string };
 
-export const SPONSORS: Sponsor[] = [
-  { name: "Zimdra Automobiles", file: "zimdra-automobiles", order: 1 },
-  { name: "Coca-Cola", file: "coca-cola", order: 2 },
-];
+// Veteran tournament: no sponsors confirmed yet, so none are shown. The departmental tournament's
+// sponsors' logos are still in public/sponsors/ if they sponsor this one too:
+//   { name: "Zimdra Automobiles", file: "zimdra-automobiles", order: 1 },
+//   { name: "Coca-Cola", file: "coca-cola", order: 2 },
+export const SPONSORS: Sponsor[] = [];

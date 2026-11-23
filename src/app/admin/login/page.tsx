@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { JubileeLogo } from "@/components/jubilee-logo";
 import { LoginForm } from "./login-form";
+import { pageTitle, TOURNAMENT_SHORT_NAME } from "@/lib/brand";
 
-export const metadata: Metadata = { title: "Admin sign in · CST Silver Jubilee Football" };
+export const metadata: Metadata = { title: pageTitle("Admin sign in") };
 
 export default async function LoginPage({ searchParams }: PageProps<"/admin/login">) {
   const { error } = await searchParams;
@@ -15,7 +16,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/admin/logi
         </span>
         <div className="leading-tight">
           <h1 className="font-display text-2xl font-bold">Match control</h1>
-          <p className="text-sm text-muted">CST Silver Jubilee Football · Admin</p>
+          <p className="text-sm text-muted">{TOURNAMENT_SHORT_NAME} · Admin</p>
         </div>
       </div>
       <LoginForm notAdmin={error === "not-admin"} />

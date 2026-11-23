@@ -2,7 +2,7 @@
 //
 //   npm run test:discipline
 
-import { computeDiscipline, DISCIPLINE, type Match, type MatchEvent } from "../src/lib/tournament";
+import { computeDiscipline, DISCIPLINE, type DisciplineRules, type Match, type MatchEvent } from "../src/lib/tournament";
 
 const A = 1; // our team
 const B = 2;
@@ -32,7 +32,7 @@ function season(n: number, finished: number[], opts: { groupMatches?: number; po
     const id = i + 1;
     return {
       id,
-      stage: opts.groupMatches != null && id > opts.groupMatches ? "round_of_16" : "group",
+      stage: opts.groupMatches != null && id > opts.groupMatches ? "semi_final" : "group",
       group_code: "A",
       slot_label: null,
       kickoff_at: new Date(Date.UTC(2026, 9, 1 + i, 12)).toISOString(),
@@ -61,6 +61,15 @@ const bannedFor = (d: ReturnType<typeof computeDiscipline>, matchId: number, pla
 
 console.log(`Rules: ${JSON.stringify(DISCIPLINE)}\n`);
 
+// The departmental tournament's rule, kept as a regression check for the consecutive option.
+const CONSECUTIVE: DisciplineRules = { ...DISCIPLINE, YELLOW_RULE: "consecutive", YELLOW_RESET_AFTER: null, PENDING_CONFIRMATION: [] };
+// The accumulated rule without the reset after the group stage (kept as a check of the switch).
+const NO_RESET: DisciplineRules = { ...DISCIPLINE, YELLOW_RESET_AFTER: null, PENDING_CONFIRMATION: [] };
+const noBan = (d: ReturnType<typeof computeDiscipline>, player = P) => ![...d.suspendedIn.values()].some((m) => m.has(player));
+
+check(DISCIPLINE.YELLOW_RULE === "accumulated" && DISCIPLINE.YELLOW_LIMIT === 2 && DISCIPLINE.YELLOW_BAN_MATCHES === 1, "configured: 2 accumulated yellows = 1-match ban");
+check(DISCIPLINE.YELLOW_RESET_AFTER === "group" && DISCIPLINE.PENDING_CONFIRMATION.length === 0, "configured: single yellows wiped after the group stage (confirmed, nothing pending)");
+
 // 1. Second yellow in one match: banned for the next match.
 {
   const d = computeDiscipline(season(3, [1]), [card(1, "yellow_card"), card(1, "yellow_card", P, 70)]);
@@ -76,27 +85,47 @@ console.log(`Rules: ${JSON.stringify(DISCIPLINE)}\n`);
   const d = computeDiscipline(season(4, [1, 2]), [card(1, "yellow_card"), card(2, "yellow_card")]);
   check(bannedFor(d, 3)?.kind === "yellows" && !bannedFor(d, 4), "yellows in two consecutive matches: banned for the next");
 }
-// 4. A clean team match in between: no ban.
+// 4. Accumulated: a clean team match in between doesn't break the count.
 {
-  const d = computeDiscipline(season(4, [1, 2, 3]), [card(1, "yellow_card"), card(3, "yellow_card")]);
-  check(![...d.suspendedIn.values()].some((m) => m.has(P)) && d.oneYellowAway.has(P), "yellow, clean match, yellow: no ban (one yellow away now)");
+  const d = computeDiscipline(season(5, [1, 2, 3]), [card(1, "yellow_card"), card(3, "yellow_card")]);
+  check(bannedFor(d, 4)?.kind === "yellows" && !bannedFor(d, 5), "yellow, clean match, yellow: banned for the next match (not necessarily consecutive)");
 }
-// 5. The run starts again after the ban is served.
+// 4b. One counting yellow: one yellow away, even after a clean match.
 {
-  // Y(1) Y(2) -> ban served in 3; Y(4) is a new run (no ban); Y(5) -> ban for 6.
+  const d = computeDiscipline(season(4, [1, 2]), [card(1, "yellow_card")]);
+  check(noBan(d) && d.oneYellowAway.get(P)?.matchId === 1, "one yellow, then a clean match: still one yellow away");
+}
+// 5. The count starts again after the ban.
+{
+  // Y(1) Y(2) -> ban served in 3; Y(4) is the first of a new count; Y(5) -> ban for 6.
   const d = computeDiscipline(season(6, [1, 2, 3, 4, 5]), [card(1, "yellow_card"), card(2, "yellow_card"), card(4, "yellow_card"), card(5, "yellow_card")]);
-  check(!!bannedFor(d, 3) && !bannedFor(d, 5) && bannedFor(d, 6)?.kind === "yellows", "after a served ban the run restarts: Y, Y, ban, Y (no ban), Y (ban)");
+  check(!!bannedFor(d, 3) && !bannedFor(d, 5) && bannedFor(d, 6)?.kind === "yellows", "after a ban the count restarts: Y, Y, ban, Y (no ban), Y (ban)");
 }
-// 6. Yellows in a match where the player was sent off don't count.
+// 6. Yellows in a match where the player was sent off don't count; earlier yellows still stand.
 {
-  // Y(1), then Y+Y in 2 (sent off: ban for 3, the yellows don't extend the run), Y in 4: no consecutive ban.
+  // Y(1); Y+Y in 2 (sent off: ban for 3, those yellows don't count); Y in 4 = 2nd counting yellow -> ban for 5.
   const d = computeDiscipline(season(5, [1, 2, 3, 4]), [card(1, "yellow_card"), card(2, "yellow_card"), card(2, "yellow_card", P, 80), card(4, "yellow_card")]);
-  check(bannedFor(d, 3)?.kind === "second_yellow" && !bannedFor(d, 5), "yellows in a sent-off match don't count toward consecutive yellows");
+  check(bannedFor(d, 3)?.kind === "second_yellow" && bannedFor(d, 5)?.kind === "yellows", "yellows in a sent-off match don't count; the earlier yellow does");
 }
-// 7. No reset after any round: a group yellow and a knockout yellow are consecutive.
+// 7. Reset after the group stage: a group yellow and a knockout yellow don't add up.
 {
   const d = computeDiscipline(season(5, [1, 2, 3, 4], { groupMatches: 3 }), [card(3, "yellow_card"), card(4, "yellow_card")]);
-  check(bannedFor(d, 5)?.kind === "yellows", "no reset between rounds: last group match + first knockout match = ban");
+  check(noBan(d) && d.oneYellowAway.get(P)?.matchId === 4, "reset after the group stage: last group yellow + semi-final yellow = no ban (one yellow away now)");
+}
+// 7b. ...and a player with one group yellow isn't "one yellow away" before the knockout stage.
+{
+  const d = computeDiscipline(season(5, [1, 2, 3], { groupMatches: 3 }), [card(2, "yellow_card")]);
+  check(!d.oneYellowAway.has(P), "group stage over, one yellow: not one yellow away (it is wiped before the semi-final)");
+}
+// 7c. A ban earned in the group stage still applies in the knockout stage.
+{
+  const d = computeDiscipline(season(5, [1, 2, 3], { groupMatches: 3 }), [card(2, "yellow_card"), card(3, "yellow_card")]);
+  check(bannedFor(d, 4)?.kind === "yellows", "ban earned by group yellows is still served in the semi-final");
+}
+// 7d. Without the reset (if the organisers say no): group + knockout yellows add up.
+{
+  const d = computeDiscipline(season(5, [1, 2, 3, 4], { groupMatches: 3 }), [card(3, "yellow_card"), card(4, "yellow_card")], NO_RESET);
+  check(bannedFor(d, 5)?.kind === "yellows", "YELLOW_RESET_AFTER null: last group yellow + semi-final yellow = ban");
 }
 // 8. A ban is served once the next match is finished.
 {
@@ -113,6 +142,15 @@ console.log(`Rules: ${JSON.stringify(DISCIPLINE)}\n`);
 {
   const d = computeDiscipline(season(3, [1, 2]), [card(1, "yellow_card", Q), card(2, "yellow_card"), card(2, "red_card", null)]);
   check(!bannedFor(d, 3, Q) && !bannedFor(d, 3, P) && d.unattributed.length === 1, "cards of different players don't combine; a card without a player is listed apart");
+}
+// 11. The consecutive option (departmental rule) still behaves as before.
+{
+  const gap = computeDiscipline(season(4, [1, 2, 3]), [card(1, "yellow_card"), card(3, "yellow_card")], CONSECUTIVE);
+  check(noBan(gap) && gap.oneYellowAway.has(P), "consecutive rule: yellow, clean match, yellow = no ban");
+  const sentOff = computeDiscipline(season(5, [1, 2, 3, 4]), [card(1, "yellow_card"), card(2, "yellow_card"), card(2, "yellow_card", P, 80), card(4, "yellow_card")], CONSECUTIVE);
+  check(bannedFor(sentOff, 3)?.kind === "second_yellow" && !bannedFor(sentOff, 5), "consecutive rule: a sent-off match breaks the run");
+  const rounds = computeDiscipline(season(5, [1, 2, 3, 4], { groupMatches: 3 }), [card(3, "yellow_card"), card(4, "yellow_card")], CONSECUTIVE);
+  check(bannedFor(rounds, 5)?.kind === "yellows", "consecutive rule, no reset: last group match + first knockout match = ban");
 }
 
 if (failures) {

@@ -1,46 +1,26 @@
 /**
  * How each team is named on screen, keyed by team code. Change a team's display name here, nowhere
  * else. The official name stays in the database (teams.name) and is what screen readers and image
- * alt text use; the code stays the internal ID (URLs like /matches?team=DBR, logo file names).
+ * alt text use; the code stays the internal ID (URLs like /matches?team=GCB, logo file names).
  *
  * `short`: the bold name shown where the code used to be (and alone in tight spots: bracket ties,
  * the LED pill, small chips). `sub`: an optional second line, smaller and muted, where there's room.
- * The two BBPLs are told apart by their short names alone.
+ * Veteran tournament names from the fixtures file; "Jaigaon Veterans" and "Samtse Veteran FC" confirmed
+ * (23 Nov 2026) over the "Jaigaon Veteran" / "Samtse Veteran" spellings in the file's notes.
  */
 export const TEAM_NAMES: Record<string, { short: string; sub?: string }> = {
-  DBR: { short: "BBPL Brewery", sub: "Bhutan Brewary Private Limited" },
-  PTX: { short: "Pling Taxi" },
-  THS: { short: "Thromde Sherig" },
-  IMM: { short: "Immigration" },
-  BFA: { short: "BFAL", sub: "Bhutan Ferro Alloys Limited" },
-  BPC: { short: "BPC", sub: "Bhutan Power Corporation" },
-  ZIM: { short: "Zimdra FC" },
-  ICP: { short: "ICP", sub: "Integrated Check Post, Phuentsholing" },
-  CSK: { short: "CST Kangtsey" },
-  BCC: { short: "BCCL", sub: "Bhutan Carbide and Chemicals Limited" },
-  GCB: { short: "GCBS", sub: "Gedu College of Business Studies" },
-  PHO: { short: "Pling Hospital" },
-  STC: { short: "STCBL", sub: "State Trading Corporation of Bhutan Limited" },
-  FIF: { short: "FI FC" },
-  "570": { short: "570 MW" },
-  TCC: { short: "TCC" },
-  DLJ: { short: "Druk Larjung" },
-  MDP: { short: "MDP FC" },
-  CSU: { short: "CST United" },
-  PEL: { short: "Pelden Warriors" },
-  FCB: { short: "FCB", sub: "Food Corporation of Bhutan" },
-  BSM: { short: "BSMPL", sub: "Bhutan Silicon Metal Private Limited" },
-  OGU: { short: "OG United" },
-  DFA: { short: "DFAL", sub: "Druk Ferro Alloys Limited" },
-  DGP: { short: "DGPC United", sub: "Druk Green Power Corporation" },
-  RIC: { short: "RICBL", sub: "Royal Insurance Corporation of Bhutan Limited" },
-  BOB: { short: "BOBL", sub: "Bank of Bhutan Limited" },
-  COK: { short: "Coca Cola" },
-  BEA: { short: "BEA" },
-  BBP: { short: "BBPL Board", sub: "Bhutan Board Product Limited" },
-  TML: { short: "Tashi Metals" },
-  BLT: { short: "Bhutan Lottery" },
-  PTD: { short: "PTDP" },
+  // Group A
+  GCB: { short: "GCBS FC" },
+  SBV: { short: "Star Bro", sub: "Star Bro Veteran FC" },
+  CSV: { short: "CST Veteran" },
+  PSB: { short: "PSB Traders" },
+  PLV: { short: "Phuenthrom Legends", sub: "Phuenthrom Legends Veteran" },
+  // Group B
+  DRV: { short: "Doors Rhino", sub: "Doors Rhino Veterans FC" },
+  JGV: { short: "Jaigaon Veterans" },
+  GMV: { short: "Gomtu Veterans", sub: "Gomtu Veterans FC" },
+  SMV: { short: "Samtse Veteran FC" },
+  RPU: { short: "Rinpung United" },
 };
 
 /** Display names set in the admin (database) win over this file; the file is the fallback. */

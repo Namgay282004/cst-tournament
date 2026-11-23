@@ -16,7 +16,7 @@ export function AdminGroups() {
     <main className="mx-auto max-w-xl pb-10">
       <h1 className="sr-only">Groups</h1>
       <nav aria-label="Jump to group" className="sticky top-[7.125rem] z-10 border-b border-border/70 bg-bg/95 px-4 py-2 backdrop-blur">
-        <ul className="grid grid-cols-8 gap-1.5">
+        <ul className="grid grid-cols-2 gap-1.5">
           {GROUP_CODES.map((g) => (
             <li key={g}>
               <a
@@ -24,7 +24,7 @@ export function AdminGroups() {
                 aria-label={`Group ${g}`}
                 className="flex h-10 flex-col items-center justify-center gap-1 rounded-lg font-display text-lg leading-none font-bold text-text active:bg-card"
               >
-                {g}
+                Group {g}
                 <span aria-hidden="true" className={`h-[3px] w-4 rounded-full ${GROUP_BG[g]}`} />
               </a>
             </li>

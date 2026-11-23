@@ -2,16 +2,19 @@ import { getImageProps } from "next/image";
 import phone from "@/assets/banner-phone.webp";
 import wide from "@/assets/banner-wide.webp";
 import { Sponsors } from "../sponsors";
+import { TOURNAMENT_DATES, TOURNAMENT_FULL_NAME, VENUE } from "@/lib/brand";
 
-const ALT = "College of Science and Technology, Royal University of Bhutan — celebrating the 25th Foundation Day";
-const TITLE = "CST Silver Jubilee Departmental Football Tournament";
+const ALT = "Indo-Bhutan Friendship Open Veteran Tournament, CST Silver Jubilee Celebration: the Silver Jubilee emblem between the flags of India and Bhutan";
 // Breakpoint where the wider crop takes over (Tailwind's sm). The page column is max-w-xl (576px).
 const WIDE_FROM = 640;
 
 /**
- * Live page banner, shown the same way whether or not a match is live: the foundation-day artwork, then the tournament name as
- * real text (the artwork doesn't mention the tournament), then the sponsors. The artwork ends just
- * below "Celebrating 25th Foundation Day"; phones get a narrower crop, wider screens its full width. Low priority and not preloaded: it never holds up the scores.
+ * Live page banner, shown the same way whether or not a match is live: the tournament artwork (it carries the
+ * tournament's name), one line with the venue and dates, then the sponsors. The full name is the section's
+ * heading for screen readers; shown again under artwork that already names the tournament it would only push
+ * the scores down. Phones get a crop without the artwork's small venue/date row and outer flag edges (that row
+ * is about 4 px tall at phone width), wider screens the whole artwork (python3 scripts/brand-assets.py).
+ * Low priority and not preloaded: it never holds up the scores.
  */
 export function BannerHero() {
   const common = { alt: ALT, fetchPriority: "low" as const, loading: "lazy" as const };
@@ -22,17 +25,20 @@ export function BannerHero() {
     <section aria-labelledby="tournament-title" className="overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-border/60">
       {/* Fixed proportions per breakpoint, so nothing below moves when the image arrives. */}
       <picture
-        className="block aspect-[1620/660] bg-cover bg-center sm:aspect-[1990/750]"
+        className="block aspect-[980/350] bg-cover bg-center sm:aspect-[1280/384]"
         style={{ backgroundImage: `url(${phone.blurDataURL})` }}
       >
         <source media={`(min-width: ${WIDE_FROM}px)`} srcSet={wideSrcSet} sizes="544px" />
         {/* eslint-disable-next-line jsx-a11y/alt-text -- alt comes from getImageProps */}
         <img {...img} className="h-full w-full object-cover" />
       </picture>
-      <h2 id="tournament-title" className="px-4 pt-2.5 pb-2.5 text-center font-display text-[19px] leading-tight font-bold text-balance text-brand-text">
-        {TITLE}
+      <h2 id="tournament-title" className="sr-only">
+        {TOURNAMENT_FULL_NAME}
       </h2>
-      {/* Sponsors: one slim row under the title, behind a thin divider. */}
+      <p className="px-4 py-2 text-center text-sm font-medium text-muted">
+        {VENUE} · {TOURNAMENT_DATES}
+      </p>
+      {/* Sponsors: one slim row under the venue and dates, behind a thin divider. */}
       <Sponsors place="banner" className="mx-4 border-t border-border py-2" />
     </section>
   );

@@ -1,13 +1,15 @@
-// Loads all teams and matches from the Match Schedule sheet, and registers the admin.
+// Loads all teams and matches from the Schedule sheet of the fixtures file, and registers the admin.
 // Safe to run repeatedly: upserts fixture fields only, never touches scores or status.
+// Nothing is written unless the schedule passes every check (10 teams, 23 matches, each group a
+// single round-robin, SF1/SF2/Final present).
 import { admin, check } from "./lib/admin-client";
-import { readSchedule } from "./lib/schedule";
+import { readSchedule, validateSchedule } from "./lib/schedule";
 
 async function main() {
   const { teams, matches } = await readSchedule();
 
-  if (teams.length !== 33) throw new Error(`Expected 33 teams, parsed ${teams.length}`);
-  if (matches.length !== 68) throw new Error(`Expected 68 matches, parsed ${matches.length}`);
+  const problems = validateSchedule({ teams, matches });
+  if (problems.length) throw new Error(`Nothing was written. The fixtures file has problems:\n  ${problems.join("\n  ")}`);
 
   const savedTeams = check(
     await admin.from("teams").upsert(teams, { onConflict: "slot" }).select("id, slot"),

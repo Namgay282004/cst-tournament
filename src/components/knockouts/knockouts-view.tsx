@@ -28,11 +28,11 @@ export function KnockoutsView() {
     <div>
       <header className="px-1">
         <h1 className="font-display text-[28px] leading-tight font-bold">Knockouts</h1>
-        <p className="text-sm text-muted">Single elimination. Level at full time goes to penalties.</p>
+        <p className="text-sm text-muted">Semi-finals and Final. A draw at full time goes to extra time or straight to penalties.</p>
       </header>
 
       <div className="sticky top-0 z-20 -mx-4 mt-3 border-b border-border/70 bg-bg/95 px-4 py-2.5 backdrop-blur">
-        <div role="tablist" aria-label="Round" className="grid grid-cols-4 gap-1 rounded-xl bg-card p-1 ring-1 ring-border">
+        <div role="tablist" aria-label="Round" className="grid grid-cols-2 gap-1 rounded-xl bg-card p-1 ring-1 ring-border">
           {KNOCKOUT_ROUNDS.map((r) => (
             <button
               key={r.key}
@@ -45,7 +45,7 @@ export function KnockoutsView() {
                 r.key === roundKey ? "bg-brand text-white shadow-sm" : "text-muted active:bg-bg"
               }`}
             >
-              {r.shortLabel}
+              {r.label}
             </button>
           ))}
         </div>
@@ -78,7 +78,7 @@ export function KnockoutsView() {
                 </div>
               </div>
             )}
-            {/* In playing order: the 3rd place match is the day before the final. */}
+            {/* No 3rd place match in this tournament; kept for a schedule that has one. */}
             {bySlot.get("3RD") && <KnockoutCard match={bySlot.get("3RD")!} />}
             {bySlot.get("FINAL") && <KnockoutCard match={bySlot.get("FINAL")!} featured />}
           </div>
@@ -113,7 +113,7 @@ export function KnockoutsView() {
   );
 }
 
-/** "Winners meet in QF1", from the stored sources. */
+/** "Winners meet in the Final", from the stored sources. */
 function NextTie({ match, matches }: { match: Match; matches: Match[] }) {
   const next = winnerGoesTo(match, matches);
   if (!next?.slot_label) return null;

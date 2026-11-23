@@ -27,7 +27,9 @@ export function ConnectionPill() {
       className="inline-flex items-center gap-1.5 rounded-full bg-white/12 px-2.5 py-1 text-xs font-medium text-white"
     >
       <span className="size-1.5 animate-pulse rounded-full bg-accent" />
-      {state === "reconnecting" ? "Reconnecting…" : "Connecting…"}
+      {/* Phones: the shorter word, so the tournament name in the header isn't cut short. */}
+      <span className="sm:hidden">{state === "reconnecting" ? "Retrying" : "Connecting"}</span>
+      <span className="hidden sm:inline">{state === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span>
     </span>
   );
 }

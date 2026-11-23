@@ -46,14 +46,14 @@ export function GroupsView() {
     <div>
       <header className="px-1">
         <h1 className="font-display text-[28px] leading-tight font-bold">Groups</h1>
-        <p className="text-sm text-muted">Top two in each group reach the Round of 16.</p>
+        <p className="text-sm text-muted">Top two in each group reach the semi-finals.</p>
       </header>
 
       <nav
         aria-label="Jump to group"
         className="sticky top-0 z-20 -mx-4 mt-3 border-b border-border/70 bg-bg/95 px-4 py-2.5 backdrop-blur"
       >
-        <ul className="grid grid-cols-8 gap-1.5">
+        <ul className="grid grid-cols-2 gap-1.5">
           {GROUP_CODES.map((g) => (
             <li key={g}>
               <a
@@ -64,7 +64,7 @@ export function GroupsView() {
                   active === g ? "bg-card text-text shadow-sm ring-1 ring-border" : "text-muted"
                 }`}
               >
-                {g}
+                Group {g}
                 <span aria-hidden="true" className={`h-[3px] w-4 rounded-full ${GROUP_BG[g]} ${active === g ? "" : "opacity-40"}`} />
               </a>
             </li>

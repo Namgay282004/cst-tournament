@@ -5,6 +5,15 @@ import { ALLOW_RE_ENTRY, type SubWarning } from "@/lib/tournament";
 import { Sheet } from "../sheet";
 
 /**
+ * A re-entry warning as a hard block: drops the "…anyway?" question and says why it can't be saved.
+ * "#9 Dorji was substituted off at 60'. A player who has come off can't come back on in this match. Check the player or the minute."
+ */
+export function blockedText(text: string): string {
+  const fact = text.replace(/ (Bring them back on|Record this [^?]*) anyway\?$/, "");
+  return `${fact} A player who has come off can't come back on in this match. Check the player or the minute.`;
+}
+
+/**
  * Substitution warnings in a sheet, and the deliberate "Save anyway" step they require. Warnings
  * never block on their own; with ALLOW_RE_ENTRY off, re-entry warnings become a hard block.
  */
@@ -20,7 +29,7 @@ export function useSubWarnings(warnings: SubWarning[], save: () => void) {
       <div role="alert" className="space-y-1.5 rounded-xl border-l-4 border-text bg-bg px-4 py-3 text-sm font-medium">
         {warnings.map((w) => (
           <p key={w.text}>
-            {blocked && w.reEntry ? `${w.text.replace(/ Bring them back on anyway\?$/, "").replace(/ anyway\?$/, ".")} Re-entry isn't allowed.` : w.text}
+            {blocked && w.reEntry ? blockedText(w.text) : w.text}
           </p>
         ))}
       </div>

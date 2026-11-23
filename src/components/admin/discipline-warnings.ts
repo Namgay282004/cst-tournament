@@ -5,7 +5,7 @@ import { formatDay } from "@/lib/format";
 import { banReason, isFinished, secondYellowIds, type Ban, type EventType, type Match, type SubWarning } from "@/lib/tournament";
 import { useTournament } from "../tournament-provider";
 
-/** Why a player is banned, in words: "Sent off vs Zimdra FC, Mon 19 Oct". */
+/** Why a player is banned, in words: "Sent off vs GCBS FC, Tue 1 Dec". */
 export function useBanReason() {
   const { matchesById, teamsById } = useTournament();
   return (ban: Ban) => banReason(ban, matchesById, (id) => teamShort(id != null ? teamsById.get(id) : undefined, "TBD"), formatDay);
@@ -20,7 +20,7 @@ export function useSuspended(match: Match): Map<string, Ban> {
 /**
  * Discipline warnings for a card, goal or substitution about to be saved (warnings only, "Save
  * anyway"): the player is suspended for this match; a yellow is their second in this match (sent
- * off); a yellow after one in the team's previous match means a ban for the next match.
+ * off); a yellow that completes the yellow-card count (DISCIPLINE) means a ban for the next match.
  */
 export function useDisciplineWarnings({
   match,

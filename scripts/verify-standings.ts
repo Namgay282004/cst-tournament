@@ -32,7 +32,7 @@ async function main() {
   }
   const ties = GROUP_CODES.flatMap((g) => app[g].rows.filter((r) => r.tiedUnresolved).map((r) => `${g}:${r.team.short_code}`));
   console.log(ties.length ? `\nLevel on every tie-breaker (no override yet): ${ties.join(", ")}` : "\nNo unresolved ties.");
-  console.log(mismatches ? `\n${mismatches} row(s) differ.` : "\nApp standings match the database view for all 8 groups.");
+  console.log(mismatches ? `\n${mismatches} row(s) differ.` : `\nApp standings match the database view for all ${GROUP_CODES.length} groups.`);
   process.exit(mismatches ? 1 : 0);
 }
 

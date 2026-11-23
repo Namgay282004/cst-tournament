@@ -17,10 +17,10 @@ function expect(ok: boolean, label: string, detail = "") {
 async function main() {
   // Reads
   const teams = await anon.from("teams").select("id", { count: "exact", head: true });
-  expect(!teams.error && teams.count === 33, "read teams", `count=${teams.count} ${teams.error?.message ?? ""}`);
+  expect(!teams.error && teams.count === 10, "read teams", `count=${teams.count} ${teams.error?.message ?? ""}`);
 
   const matches = await anon.from("matches").select("id", { count: "exact", head: true });
-  expect(!matches.error && matches.count === 68, "read matches", `count=${matches.count} ${matches.error?.message ?? ""}`);
+  expect(!matches.error && matches.count === 23, "read matches", `count=${matches.count} ${matches.error?.message ?? ""}`);
 
   const standings = await anon.from("group_standings").select("group_code, position").eq("group_code", "A");
   expect(!standings.error && standings.data?.length === 5, "read group_standings (Group A)", standings.error?.message);
@@ -40,7 +40,7 @@ async function main() {
   const update = await anon.from("matches").update({ home_score: 99, notes: "hacked" }).eq("id", 1).select("id");
   expect(!update.error ? update.data.length === 0 : true, "update match blocked", `rows=${update.data?.length ?? 0}`);
 
-  const del = await anon.from("matches").delete().eq("id", 68).select("id");
+  const del = await anon.from("matches").delete().eq("id", 23).select("id");
   expect(!del.error ? del.data.length === 0 : true, "delete match blocked", `rows=${del.data?.length ?? 0}`);
 
   const eventInsert = await anon.from("match_events").insert({ match_id: 1, type: "goal", team_id: 1, minute: 1 });

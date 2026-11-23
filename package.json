@@ -27,7 +27,8 @@
     "sponsors": "python3 scripts/sponsor-logos.py",
     "logos": "tsx scripts/team-logos.ts",
     "backup:live": "tsx --env-file=.env.local scripts/backup-live.ts",
-    "compare:live": "tsx --env-file=.env.local scripts/compare-live.ts"
+    "compare:live": "tsx --env-file=.env.local scripts/compare-live.ts",
+    "test:veteran": "tsx scripts/test-veteran.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

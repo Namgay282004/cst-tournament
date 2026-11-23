@@ -5,8 +5,13 @@ import { randomUUID, randomBytes } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "../src/lib/supabase/database.types";
 import { admin as service } from "./lib/admin-client";
+import { requireDepartmentalFixtures } from "./lib/old-fixtures-guard";
 import { fetchSnapshot } from "../src/lib/snapshot";
-import { computeStandings } from "../src/lib/tournament";
+import { computeStandings, type GroupStandings } from "../src/lib/tournament";
+
+// Departmental-tournament only (Group G no longer exists in GROUP_CODES); this script refuses to run elsewhere.
+const groupG = (snap: { teams: Parameters<typeof computeStandings>[0]; matches: Parameters<typeof computeStandings>[1] }) =>
+  (computeStandings(snap.teams, snap.matches) as Record<string, GroupStandings>).G ?? { rows: [] as GroupStandings["rows"] };
 
 type Client = SupabaseClient<Database>;
 const URL_ = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -42,6 +47,7 @@ async function checkConsistent(matchId: number, label: string) {
 }
 
 async function main() {
+  await requireDepartmentalFixtures("test:admin");
   const tag = randomBytes(4).toString("hex");
   const adminEmail = `e2e-admin-${tag}@example.invalid`;
   const userEmail = `e2e-user-${tag}@example.invalid`;
@@ -367,10 +373,10 @@ async function qualifierChecks(adm: Client) {
     r = await adm.rpc("admin_set_qualifier_order", { p_group: "G", p_team_ids: order });
     const { data: view } = await service.from("group_standings").select("team_id, position").eq("group_code", "G").order("position");
     const snap = await fetchSnapshot(service);
-    const app = computeStandings(snap.teams, snap.matches).G.rows.map((x) => x.team.id);
+    const app = groupG(snap).rows.map((x) => x.team.id);
     expect(!r.error && JSON.stringify(view!.map((v) => v.team_id)) === JSON.stringify(order) && JSON.stringify(app) === JSON.stringify(order),
       "set order decides positions, identically in the database and the app", r.error?.message);
-    expect(computeStandings(snap.teams, snap.matches).G.rows.every((x) => x.orderedByOverride && !x.tiedUnresolved), "rows marked as ordered by the admin");
+    expect(groupG(snap).rows.every((x) => x.orderedByOverride && !x.tiedUnresolved), "rows marked as ordered by the admin");
 
     fill = await adm.rpc("admin_fill_round_of_16");
     const { data: m55 } = await service.from("matches").select("home_team_id").eq("id", 55).single();
@@ -379,7 +385,7 @@ async function qualifierChecks(adm: Client) {
 
     r = await adm.rpc("admin_clear_qualifier_order", { p_group: "G" });
     const after = await fetchSnapshot(service);
-    expect(!r.error && computeStandings(after.teams, after.matches).G.rows.every((x) => x.tiedUnresolved), "clear returns Group G to a dead heat", r.error?.message);
+    expect(!r.error && groupG(after).rows.every((x) => x.tiedUnresolved), "clear returns Group G to a dead heat", r.error?.message);
   } finally {
     for (const id of [...R16_FROM_G, ...GROUP_G_MATCHES]) {
       await service.from("match_events").delete().eq("match_id", id);

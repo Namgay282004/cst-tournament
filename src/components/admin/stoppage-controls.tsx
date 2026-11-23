@@ -345,8 +345,8 @@ function WhenSheet({
           <input
             type="date"
             value={date}
-            min="2026-09-26"
-            max="2026-10-31"
+            min="2026-11-24"
+            max="2026-12-31"
             onChange={(e) => setDate(e.target.value)}
             className="h-12 w-full rounded-xl px-3 text-base ring-1 ring-border outline-none focus:ring-2 focus:ring-text"
           />

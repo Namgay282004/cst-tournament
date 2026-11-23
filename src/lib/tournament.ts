@@ -492,12 +492,13 @@ export function groupOfficials(officials: Official[], matchId: number): { label:
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Length of one half in minutes. To be confirmed with the organisers. */
+/** Length of one half in minutes (45, confirmed for the veteran tournament). Must match public.half_length_minutes(). */
 export const HALF_LENGTH_MINUTES = 45;
 export const POINTS_FOR_WIN = 3;
 export const POINTS_FOR_DRAW = 1;
 export const QUALIFIERS_PER_GROUP = 2;
-export const GROUP_CODES = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+// Veteran tournament: two groups of five.
+export const GROUP_CODES = ["A", "B"] as const;
 export type GroupCode = (typeof GROUP_CODES)[number];
 
 const LIVE_STATUSES: readonly MatchStatus[] = ["first_half", "half_time", "second_half", "penalties"];
@@ -895,21 +896,25 @@ function record(row: StandingRow, scored: number, conceded: number) {
 // ---------------------------------------------------------------------------
 
 export type KnockoutRound = {
-  key: "r16" | "qf" | "sf" | "finals";
+  key: "sf" | "finals";
   label: string;
   shortLabel: string;
   /** Slot labels in bracket order (pairs feed the next round). */
   slots: string[];
 };
 
+// Veteran tournament: SF1 = Winner Group A v Runner-up Group B, SF2 = Winner Group B v Runner-up
+// Group A, then the Final. No 3rd place match.
 export const KNOCKOUT_ROUNDS: KnockoutRound[] = [
-  { key: "r16", label: "Round of 16", shortLabel: "R16",
-    slots: ["R16-M1", "R16-M2", "R16-M3", "R16-M4", "R16-M5", "R16-M6", "R16-M7", "R16-M8"] },
-  { key: "qf", label: "Quarter-finals", shortLabel: "QF", slots: ["QF1", "QF2", "QF3", "QF4"] },
   { key: "sf", label: "Semi-finals", shortLabel: "SF", slots: ["SF1", "SF2"] },
-  // 3rd place first: it is played the day before the final.
-  { key: "finals", label: "Finals", shortLabel: "Final", slots: ["3RD", "FINAL"] },
+  { key: "finals", label: "Final", shortLabel: "Final", slots: ["FINAL"] },
 ];
+
+/** A knockout match that takes at least one team straight from the group tables (filled by "Fill semi-finals"). */
+export function takesGroupTeams(m: Pick<Match, "home_source" | "away_source">): boolean {
+  const fromGroup = (s: Match["home_source"]) => s === "group_winner" || s === "group_runner_up";
+  return fromGroup(m.home_source) || fromGroup(m.away_source);
+}
 
 /**
  * A bracket label as shown to people, matching the official bracket: "R16-M1" → "M1",
@@ -1031,8 +1036,9 @@ export type FillPlan = {
 };
 
 /**
- * What "Fill Round of 16" will do, slot by slot. Mirrors admin_fill_round_of_16 in the database:
- * only complete groups, never a dead heat, never a tie that has started.
+ * What "Fill semi-finals" will do, slot by slot. Mirrors admin_fill_round_of_16 in the database
+ * (name kept from the departmental tournament): every knockout match that takes a team from the group
+ * tables, only complete groups, never a dead heat, never a tie that has started.
  */
 export function previewFillRound16(
   matches: Match[],
@@ -1041,19 +1047,21 @@ export function previewFillRound16(
   teamsById: Map<number, Team>,
 ): FillPlan[] {
   const plans: FillPlan[] = [];
-  const r16 = matches.filter((m) => m.stage === "round_of_16").sort((a, b) => (a.slot_label ?? "").localeCompare(b.slot_label ?? ""));
-  for (const match of r16) {
+  const fromGroups = matches.filter(takesGroupTeams).sort((a, b) => (a.slot_label ?? "").localeCompare(b.slot_label ?? ""));
+  for (const match of fromGroups) {
     const started = match.status !== "scheduled" || events.some((e) => e.match_id === match.id);
     for (const side of ["home", "away"] as const) {
+      const source = side === "home" ? match.home_source : match.away_source;
+      if (source !== "group_winner" && source !== "group_runner_up") continue;
       const group = (side === "home" ? match.home_source_group : match.away_source_group) as GroupCode;
-      const position = (side === "home" ? match.home_source : match.away_source) === "group_winner" ? 1 : 2;
+      const position = source === "group_winner" ? 1 : 2;
       const currentId = teamIdOn(match, side);
       const current = currentId != null ? teamsById.get(currentId) ?? null : null;
       const g = standings[group];
-      const row = g.rows[position - 1];
+      const row = g?.rows[position - 1];
       const placeholder = `${position === 1 ? "Winner" : "Runner-up"} Group ${group}`;
       let plan: Omit<FillPlan, "match" | "side" | "placeholder" | "current">;
-      if (!g.complete) plan = { team: null, outcome: "skipped", reason: `Group ${group} not complete` };
+      if (!g?.complete) plan = { team: null, outcome: "skipped", reason: `Group ${group} not complete` };
       else if (!row || row.tiedUnresolved) plan = { team: null, outcome: "skipped", reason: `Group ${group} needs a decision` };
       else if (row.team.id === currentId) plan = { team: row.team, outcome: "unchanged", reason: null };
       else if (started) plan = { team: row.team, outcome: "skipped", reason: `${slotDisplayName(match.slot_label ?? "")} has already started` };
@@ -1186,11 +1194,11 @@ export function byShirtOrder(a: Player, b: Player): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether a player who was substituted off may come back on (rolling substitutions). Until the
- * organisers confirm, re-entry is only warned about: the admin sees the warning and can "Save
- * anyway". Set to false to make re-entry (and goals or cards after going off) a hard block.
+ * Whether a player who was substituted off may come back on (rolling substitutions). Veteran
+ * tournament: no (confirmed), so re-entry, and goals or cards for a player who has gone off, are a
+ * hard block in the admin sheets. Set to true to make them warnings with "Save anyway" again.
  */
-export const ALLOW_RE_ENTRY = true;
+export const ALLOW_RE_ENTRY = false;
 
 type Moment = { minute: number | null; added_time: number | null };
 
@@ -1404,27 +1412,75 @@ export function eventMinuteLabel(e: Pick<MatchEvent, "minute" | "added_time">): 
 // Discipline: cards and suspensions (rules confirmed by the organisers)
 // ---------------------------------------------------------------------------
 
+/** How single yellow cards add up to a ban. */
+export type YellowRule =
+  /** A yellow in two of the team's consecutive matches (the departmental tournament's rule). */
+  | "consecutive"
+  /** YELLOW_LIMIT yellows in different matches, not necessarily consecutive (international practice). */
+  | "accumulated";
+
+export type DisciplineRules = {
+  SECOND_YELLOW_BAN_MATCHES: number;
+  RED_BAN_MATCHES: number;
+  YELLOW_RULE: YellowRule;
+  /** Consecutive rule only: consecutive in the team's matches. */
+  CONSECUTIVE_BY: "team";
+  /** Accumulated rule only: yellows (in different matches) that make a ban. */
+  YELLOW_LIMIT: number;
+  YELLOW_BAN_MATCHES: number;
+  /** "group": single yellows are wiped before the team's first knockout match; null: never. */
+  YELLOW_RESET_AFTER: "group" | null;
+  /** Rules still waiting for the organisers' confirmation (shown as such in the admin's Discipline view). */
+  PENDING_CONFIRMATION: readonly ("YELLOW_RESET_AFTER")[];
+};
+
 /**
- * The organisers' discipline rules, all in one place.
+ * The discipline rules, all in one place (veteran tournament: international IFAB/FIFA competition practice).
  * - Two yellows in one match: sent off, banned for the team's next SECOND_YELLOW_BAN_MATCHES match(es).
- * - A straight red: banned for the team's next RED_BAN_MATCHES match(es). Longer bans for serious red
- *   cards are the organisers' decision (not built).
- * - YELLOW_RULE "consecutive": a yellow in two of the team's consecutive matches (CONSECUTIVE_BY "team":
- *   the team's matches, so a match in between without a yellow, or that the player missed, breaks the
- *   run) bans the player for the team's next YELLOW_BAN_MATCHES match(es); after the ban the run starts
+ * - A straight red: banned for the team's next RED_BAN_MATCHES match(es). Longer bans for violent
+ *   conduct are the organisers' decision (not built).
+ * - YELLOW_RULE "accumulated": a player's YELLOW_LIMIT-th yellow, in a different match (not necessarily
+ *   consecutive), bans them for the team's next YELLOW_BAN_MATCHES match(es); the count then starts
  *   again from zero. Yellows in a match where the player was sent off don't count.
- * - YELLOW_RESET_AFTER null: yellow cards never reset during the tournament.
+ *   ("consecutive" is the departmental tournament's rule, kept for reference: a yellow in two of the
+ *   team's consecutive matches; a team match in between without one breaks the run.)
+ * - YELLOW_RESET_AFTER "group": single yellows don't carry into the knockout stage (bans already earned
+ *   still apply). Confirmed by the organisers (23 Nov 2026).
  * - A ban is served when the team's next match is finished; postponed or abandoned matches don't count.
  */
-export const DISCIPLINE = {
+export const DISCIPLINE: DisciplineRules = {
   SECOND_YELLOW_BAN_MATCHES: 1,
   RED_BAN_MATCHES: 1,
-  YELLOW_RULE: "consecutive",
+  YELLOW_RULE: "accumulated",
   CONSECUTIVE_BY: "team",
+  YELLOW_LIMIT: 2,
   YELLOW_BAN_MATCHES: 1,
-  YELLOW_RESET_AFTER: null,
-} as const;
+  YELLOW_RESET_AFTER: "group",
+  PENDING_CONFIRMATION: [],
+};
 export const RED_BAN_MATCHES = DISCIPLINE.RED_BAN_MATCHES;
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** The rules in plain words, for the admin's Discipline view. */
+export function disciplineRulesText(rules: DisciplineRules = DISCIPLINE): { rules: string[]; pending: string[] } {
+  const next = (n: number) => (n === 1 ? "the team's next match" : `the team's next ${n} matches`);
+  const lines = [
+    `Two yellows in one match: sent off, banned for ${next(rules.SECOND_YELLOW_BAN_MATCHES)}.`,
+    `Straight red card: banned for ${next(rules.RED_BAN_MATCHES)}. Longer bans for violent conduct are the organisers' decision and aren't counted here.`,
+    rules.YELLOW_RULE === "accumulated"
+      ? `${plural(rules.YELLOW_LIMIT, "yellow card", "yellow cards")} in different matches (not necessarily consecutive): banned for ${next(rules.YELLOW_BAN_MATCHES)}, then the count starts again.`
+      : `A yellow in two of the team's consecutive matches: banned for ${next(rules.YELLOW_BAN_MATCHES)}, then the run starts again.`,
+    rules.YELLOW_RESET_AFTER === "group"
+      ? "Single yellow cards are wiped after the group stage (bans already earned still apply)."
+      : "Yellow cards never reset.",
+    "A ban is served when the team's next match is played.",
+  ];
+  const pending = rules.PENDING_CONFIRMATION.includes("YELLOW_RESET_AFTER")
+    ? ["Wiping single yellow cards after the group stage is still to be confirmed by the organisers."]
+    : [];
+  return { rules: lines, pending };
+}
 
 export type BanKind = "red" | "second_yellow" | "yellows";
 export type Ban = {
@@ -1466,14 +1522,13 @@ export function secondYellowIds(events: Pick<MatchEvent, "id" | "match_id" | "ty
 /**
  * Applies the discipline rules to every team's finished matches in kick-off order: each finished
  * match first serves the bans pending for that team's players, then its cards may start new bans or
- * yellow runs. Pending bans then apply to the team's next matches not yet finished.
+ * add to a player's yellow count. Pending bans then apply to the team's next matches not yet finished.
  */
-export function computeDiscipline(matches: Match[], events: MatchEvent[]): Discipline {
+export function computeDiscipline(matches: Match[], events: MatchEvent[], rules: DisciplineRules = DISCIPLINE): Discipline {
   const cards = new Map<string, PlayerMatchCards[]>();
   const pendingByPlayer = new Map<string, Ban & { left: number }>();
   const suspendedIn = new Map<number, Map<string, Ban>>();
   const oneYellowAway = new Map<string, { teamId: number; matchId: number }>();
-  const lastYellow = new Map<string, number>(); // player -> index (in their team's finished matches) of a counting yellow
   const cardEvents = events.filter((e) => e.type === "yellow_card" || e.type === "red_card");
   const unattributed = cardEvents.filter((e) => !e.player_id);
   const byMatch = new Map<number, MatchEvent[]>();
@@ -1486,10 +1541,21 @@ export function computeDiscipline(matches: Match[], events: MatchEvent[]): Disci
     suspendedIn.set(matchId, map);
   };
 
+  const accumulated = rules.YELLOW_RULE === "accumulated";
+  const yellowLimit = accumulated ? Math.max(1, rules.YELLOW_LIMIT) : 2;
+
   for (const teamId of teamIds) {
     const teamMatches = ordered.filter((m) => m.home_team_id === teamId || m.away_team_id === teamId);
     const finished = teamMatches.filter(isFinished);
+    // Per player of this team: counting yellows so far and the index (in finished) of the latest one.
+    const counting = new Map<string, { count: number; lastIdx: number }>();
+    let wiped = false; // single yellows already wiped for the knockout stage
     finished.forEach((m, i) => {
+      // 0. Single yellows don't carry into the knockout stage (when the rule says so).
+      if (rules.YELLOW_RESET_AFTER === "group" && m.stage !== "group" && !wiped) {
+        counting.clear();
+        wiped = true;
+      }
       // 1. This match being played serves the bans pending for this team's players.
       for (const ban of [...pendingByPlayer.values()].filter((b) => b.teamId === teamId)) {
         mark(m.id, ban);
@@ -1510,29 +1576,35 @@ export function computeDiscipline(matches: Match[], events: MatchEvent[]): Disci
         cards.set(playerId, [...(cards.get(playerId) ?? []), { matchId: m.id, teamId, yellows: c.yellows, red: c.red, sentOff }]);
         if (sentOff) {
           const kind: BanKind = c.yellows >= 2 && !c.red ? "second_yellow" : "red";
-          const n = kind === "red" ? DISCIPLINE.RED_BAN_MATCHES : DISCIPLINE.SECOND_YELLOW_BAN_MATCHES;
+          const n = kind === "red" ? rules.RED_BAN_MATCHES : rules.SECOND_YELLOW_BAN_MATCHES;
           pendingByPlayer.set(playerId, { playerId, teamId, kind, fromMatchId: m.id, matches: n, left: n });
-          // Yellows in a match where the player was sent off don't count, and the run is broken.
-          lastYellow.delete(playerId);
+          // Yellows in a match where the player was sent off don't count. Under the consecutive rule the
+          // run is broken; under the accumulated rule earlier yellows still stand.
+          if (!accumulated) counting.delete(playerId);
         } else if (c.yellows === 1) {
-          if (lastYellow.get(playerId) === i - 1) {
-            const n = DISCIPLINE.YELLOW_BAN_MATCHES;
+          const prev = counting.get(playerId);
+          // Consecutive: only a yellow in the team's previous match continues the run.
+          const count = accumulated ? (prev?.count ?? 0) + 1 : prev?.lastIdx === i - 1 ? prev.count + 1 : 1;
+          if (count >= yellowLimit) {
+            const n = rules.YELLOW_BAN_MATCHES;
             pendingByPlayer.set(playerId, { playerId, teamId, kind: "yellows", fromMatchId: m.id, matches: n, left: n });
-            lastYellow.delete(playerId); // the run starts again from zero after the ban
-          } else lastYellow.set(playerId, i);
+            counting.delete(playerId); // the count starts again from zero after the ban
+          } else counting.set(playerId, { count, lastIdx: i });
         }
       }
-      // A team match without a counting yellow for a player breaks their run (handled by the index check).
     });
-    // Players one yellow away: a counting yellow in the team's last finished match, no ban pending,
-    // and the team still has a match to play (knocked-out teams are left out).
+    // Players one yellow away from a ban: no ban pending, the team still has a match to play (knocked-out
+    // teams are left out), and their count still stands for that match. Consecutive rule: the yellow was in
+    // the team's last finished match. Reset after the group stage: not if the team's next match is a
+    // knockout match that will wipe the count.
     const lastIndex = finished.length - 1;
-    const stillPlaying = teamMatches.some((m) => !isFinished(m));
-    for (const [playerId, idx] of lastYellow) {
-      if (stillPlaying && idx === lastIndex && lastIndex >= 0 && !pendingByPlayer.has(playerId)) {
-        const playedFor = cards.get(playerId)?.find((c) => c.matchId === finished[idx].id && c.teamId === teamId);
-        if (playedFor) oneYellowAway.set(playerId, { teamId, matchId: finished[idx].id });
-      }
+    const nextMatch = teamMatches.find((m) => !isFinished(m));
+    const wipedBeforeNext = rules.YELLOW_RESET_AFTER === "group" && !wiped && nextMatch != null && nextMatch.stage !== "group";
+    for (const [playerId, { count, lastIdx }] of counting) {
+      if (!nextMatch || wipedBeforeNext || pendingByPlayer.has(playerId) || count !== yellowLimit - 1) continue;
+      if (!accumulated && lastIdx !== lastIndex) continue;
+      const playedFor = cards.get(playerId)?.find((c) => c.matchId === finished[lastIdx].id && c.teamId === teamId);
+      if (playedFor) oneYellowAway.set(playerId, { teamId, matchId: finished[lastIdx].id });
     }
     // Pending bans apply to the team's next matches not yet finished (in kick-off order, postponed ones included).
     const upcoming = teamMatches.filter((m) => !isFinished(m));
@@ -1543,10 +1615,13 @@ export function computeDiscipline(matches: Match[], events: MatchEvent[]): Disci
   return { cards, pending: [...pendingByPlayer.values()], suspendedIn, oneYellowAway, unattributed };
 }
 
-/** "Sent off vs Zimdra FC, 19 Oct", "Second yellow vs Zimdra FC, 19 Oct", "Yellow cards in two consecutive matches". */
+/** "Sent off vs GCBS FC, 19 Oct", "Sent off (second yellow) vs …", "Second yellow card of the tournament vs …". */
 export function banReason(ban: Ban, matchesById: Map<number, Match>, opponentName: (teamId: number | null) => string, day: (iso: string) => string): string {
   const m = matchesById.get(ban.fromMatchId);
   const vs = m ? ` vs ${opponentName(m.home_team_id === ban.teamId ? m.away_team_id : m.home_team_id)}, ${day(m.kickoff_at)}` : "";
-  if (ban.kind === "yellows") return "Yellow cards in two consecutive matches";
+  if (ban.kind === "yellows") {
+    if (DISCIPLINE.YELLOW_RULE === "consecutive") return "Yellow cards in two consecutive matches";
+    return DISCIPLINE.YELLOW_LIMIT === 2 ? `Second yellow card in different matches${vs}` : `${DISCIPLINE.YELLOW_LIMIT} yellow cards in different matches${vs}`;
+  }
   return `${ban.kind === "second_yellow" ? "Sent off (second yellow)" : "Sent off"}${vs}`;
 }

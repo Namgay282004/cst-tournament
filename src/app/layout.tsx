@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Barlow, Barlow_Condensed } from "next/font/google";
 import "./globals.css";
+import { SITE_DESCRIPTION, TOURNAMENT_FULL_NAME, TOURNAMENT_SHORT_NAME } from "@/lib/brand";
 
 const barlow = Barlow({
   variable: "--font-barlow",
@@ -14,8 +15,8 @@ const barlowCondensed = Barlow_Condensed({
   weight: ["500", "600", "700"],
 });
 
-const TITLE = "CST Silver Jubilee Football — live scores";
-const DESCRIPTION = "Live scores, group tables and knockouts";
+const TITLE = `${TOURNAMENT_SHORT_NAME} — live scores`;
+const DESCRIPTION = `${TOURNAMENT_FULL_NAME}. ${SITE_DESCRIPTION}`;
 
 // Absolute base for share-image URLs: NEXT_PUBLIC_SITE_URL if set, else the Vercel
 // production domain, else localhost (local runs only).
@@ -31,11 +32,11 @@ export const metadata: Metadata = {
   metadataBase: siteUrl(),
   title: TITLE,
   description: DESCRIPTION,
-  applicationName: "CST Silver Jubilee Football",
+  applicationName: TOURNAMENT_SHORT_NAME,
   openGraph: {
     title: TITLE,
     description: DESCRIPTION,
-    siteName: "CST Silver Jubilee Football",
+    siteName: TOURNAMENT_SHORT_NAME,
     type: "website",
   },
   twitter: {

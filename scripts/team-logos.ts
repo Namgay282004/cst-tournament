@@ -3,7 +3,7 @@
 //   npm run logos
 //
 // Files are matched to teams by name (case-insensitive): the official name from the schedule's
-// teams, or an alias below. Nothing is guessed: files that match no team are reported and skipped.
+// teams, the team code (GCB, JGV, …), or an alias below. Nothing is guessed: files that match no team are reported and skipped.
 // Each logo is put on a square canvas (background removed where possible, centred with even
 // padding, or cropped to a circle), and saved as WebP sized for the light circular plate the app
 // shows it on. Unchanged logos are skipped, so it is safe to re-run. Reads files only; no database.
@@ -23,12 +23,7 @@ const PIPELINE_VERSION = 1;
 
 /** File names that differ from the official team names (lower case, without extension). */
 const ALIASES: Record<string, string> = {
-  bbpl: "DBR", // BBPL (Bhutan Brewary Private Limited), Group A
-  "bbpl (board)": "BBP", // Bhutan Board Product Limited (BBPL), Group H
-  fifc: "FIF",
-  "palden worriors": "PEL",
-  "tashi metal": "TML",
-  icp: "ICP",
+  "jaigaon veteran": "JGV", // Jaigaon Veterans, Group B
 };
 
 /**
@@ -42,12 +37,8 @@ const USE_CODE_BADGE = new Set<string>([]);
  * Applied before the background is removed. Delete a line to use the whole file again.
  */
 type Crop = { left: number; top: number; width: number; height: number };
-const DRUK_GREEN_SWIRL: Crop = { left: 0, top: 319, width: 398, height: 420 }; // swirl only: no wordmark, no screenshot icon
 const CROPS: Record<string, Crop> = {
-  "570": DRUK_GREEN_SWIRL,
-  DLJ: DRUK_GREEN_SWIRL,
-  DGP: DRUK_GREEN_SWIRL,
-  FIF: { left: 248, top: 16, width: 87, height: 87 }, // the crest between the BNB and T-Bank logos
+  // e.g. GCB: { left: 0, top: 0, width: 400, height: 400 },
 };
 
 type Kind = "light" | "dark" | "clear" | null;
@@ -181,7 +172,8 @@ async function main() {
   const clashes: string[] = [];
   for (const f of files) {
     const stem = path.parse(f).name.trim().toLowerCase();
-    const code = ALIASES[stem] ?? byName.get(stem);
+    // The official name ("jaigaon veterans.png"), an alias, or the team code ("JGV.png").
+    const code = ALIASES[stem] ?? byName.get(stem) ?? (codes.has(stem.toUpperCase()) ? stem.toUpperCase() : undefined);
     if (!code) unmapped.push(f);
     else if (fileFor.has(code)) clashes.push(`${code}: ${fileFor.get(code)} and ${f}`);
     else fileFor.set(code, f);

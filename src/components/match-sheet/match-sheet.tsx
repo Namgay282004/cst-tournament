@@ -32,6 +32,7 @@ import { isPostponed } from "@/lib/tournament";
 import { wasLabel } from "../schedule-note";
 import { isAbandoned } from "@/lib/tournament";
 import { continuesLabel, stoppageLabel } from "../stoppage-note";
+import { VENUE } from "@/lib/brand";
 
 /** One match detail sheet for the public pages; any match opens it via useMatchSheet(). */
 export function MatchSheetProvider({ children }: { children: React.ReactNode }) {
@@ -245,7 +246,7 @@ function SummaryPanel({ match }: { match: Match }) {
             {match.schedule.reason && <span className="block text-muted">{match.schedule.reason}</span>}
           </Info>
         )}
-        <Info label="Venue">CST Artificial Turf</Info>
+        <Info label="Venue">{VENUE}</Info>
         <Info label="Stage">{stageLabel(match)}</Info>
       </dl>
     </div>

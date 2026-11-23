@@ -11,6 +11,7 @@ import {
   previewFillRound16,
   resolveSide,
   slotDisplayName,
+  takesGroupTeams,
   type KnockoutRound,
   type Match,
 } from "@/lib/tournament";
@@ -48,14 +49,14 @@ export function AdminKnockouts() {
     const report = (data ?? []) as { outcome: string }[];
     const filled = report.filter((r) => r.outcome === "filled").length;
     setFillOpen(false);
-    setNotice(filled ? `Filled ${filled} slot${filled > 1 ? "s" : ""} in the Round of 16.` : "Nothing to fill yet.");
+    setNotice(filled ? `Filled ${filled} slot${filled > 1 ? "s" : ""} in the semi-finals.` : "Nothing to fill yet.");
     await local.refresh();
   }
 
   return (
     <main className="mx-auto max-w-xl px-4 pb-10">
       <h1 className="sr-only">Knockouts</h1>
-      <div role="tablist" aria-label="Round" className="mt-3 grid grid-cols-4 gap-1 rounded-xl bg-card p-1 ring-1 ring-border">
+      <div role="tablist" aria-label="Round" className="mt-3 grid grid-cols-2 gap-1 rounded-xl bg-card p-1 ring-1 ring-border">
         {KNOCKOUT_ROUNDS.map((r) => (
           <button
             key={r.key}
@@ -65,7 +66,7 @@ export function AdminKnockouts() {
             onClick={() => setSelected(r.key)}
             className={`h-10 rounded-lg font-display text-[15px] font-bold ${r.key === roundKey ? "bg-text text-white" : "text-muted active:bg-bg"}`}
           >
-            {r.shortLabel}
+            {r.label}
           </button>
         ))}
       </div>
@@ -79,11 +80,11 @@ export function AdminKnockouts() {
         </p>
       )}
 
-      {round.key === "r16" && (
+      {round.key === "sf" && (
         <section className="mt-3 rounded-xl bg-card p-4 ring-1 ring-border/60">
           <p className="font-semibold">Fill from group standings</p>
           <p className="mt-0.5 text-sm text-muted">
-            {completeGroups} of 8 groups complete.{" "}
+            {completeGroups} of {GROUP_CODES.length} groups complete.{" "}
             {toFill.length ? `${toFill.length} slot${toFill.length > 1 ? "s" : ""} can be filled now.` : "Nothing to fill right now."}
           </p>
           <button
@@ -106,7 +107,7 @@ export function AdminKnockouts() {
           const warnings = (["home", "away"] as const).flatMap((side) => {
             const r = resolveSide(m, side, ctx);
             // A slot whose team no longer matches the final group standings.
-            return r.team && r.projected && r.projectionFinal && r.team.id !== r.projected.id && m.stage === "round_of_16"
+            return r.team && r.projected && r.projectionFinal && r.team.id !== r.projected.id && takesGroupTeams(m)
               ? [`${r.placeholder} is now ${teamShort(r.projected)}, not ${teamShort(r.team)}.`]
               : [];
           });
@@ -128,7 +129,7 @@ export function AdminKnockouts() {
         })}
       </ul>
 
-      <Sheet open={fillOpen} onClose={() => setFillOpen(false)} title="Fill Round of 16">
+      <Sheet open={fillOpen} onClose={() => setFillOpen(false)} title="Fill semi-finals">
         <p className="text-sm text-muted">Uses the schedule&apos;s pairings and the final group tables. Only complete groups are used.</p>
         {toFill.length === 0 && <p className="mt-3 text-sm font-medium">Nothing can be filled yet.</p>}
         <ul className="mt-3 divide-y divide-border overflow-hidden rounded-xl text-sm ring-1 ring-border empty:hidden">

@@ -13,8 +13,10 @@ const MAX_HEIGHT = { banner: 26, footer: 30, sheet: 22 } as const;
  * "Sponsored by" and the sponsors' logos, on white so their colours stay true. Plain images, lazy
  * and decoded off the main thread, with their size reserved: they never move or delay the scores.
  */
+const activeSponsors = () => [...SPONSORS].sort((a, b) => a.order - b.order).filter((s) => SPONSOR_SIZES[s.file]);
+
 export function Sponsors({ place, className = "" }: { place: keyof typeof AREA; className?: string }) {
-  const sponsors = [...SPONSORS].sort((a, b) => a.order - b.order).filter((s) => SPONSOR_SIZES[s.file]);
+  const sponsors = activeSponsors();
   if (!sponsors.length) return null;
   return (
     // The banner has one slim row (label inline); elsewhere the label sits above the logos.
@@ -46,6 +48,8 @@ export function Sponsors({ place, className = "" }: { place: keyof typeof AREA; 
 
 /** The sponsors at the foot of a page (Matches, Groups, Knockouts): logos on a white strip. */
 export function SponsorsFooter() {
+  // No sponsors: no empty card either.
+  if (!activeSponsors().length) return null;
   return (
     <footer className="mt-8 rounded-2xl bg-card px-4 pt-3 pb-4 ring-1 ring-border/60">
       <Sponsors place="footer" />

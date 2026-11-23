@@ -5,6 +5,7 @@
 // writes is flagged is_demo. Matches that already have real results are skipped.
 import { admin, check } from "./lib/admin-client";
 import { resetDemo } from "./lib/reset-demo";
+import { requireDepartmentalFixtures } from "./lib/old-fixtures-guard";
 import type { Database } from "../src/lib/supabase/database.types";
 
 type EventInsert = Database["public"]["Tables"]["match_events"]["Insert"];
@@ -39,6 +40,7 @@ function rng(seed: number) {
 }
 
 async function main() {
+  await requireDepartmentalFixtures("seed:demo");
   const cleared = await resetDemo();
   console.log(`Cleared previous demo data (${cleared.matches} matches, knockout stage cleared).`);
   // The demo takes over the whole knockout stage, so it must not hold real teams yet (e.g. a Round of 16

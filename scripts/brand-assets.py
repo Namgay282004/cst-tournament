@@ -3,17 +3,16 @@
   python3 scripts/brand-assets.py      (needs Pillow)
 
 Sources
-  design/banner-v2.png        the site banner (1990x1342, CST 25th Foundation Day artwork)
+  design/banner.png           the site banner (1280x384, Indo-Bhutan Friendship Open Veteran Tournament
+                              artwork: title, Silver Jubilee emblem between the Indian and Bhutanese flags,
+                              venue and opening date along the bottom)
   design/jubilee-logo.png     the official Silver Jubilee logo (transparent background)
 
 Outputs
-  src/assets/banner-phone.webp    Live page banner on phones: the three logos, "College of Science and
-                                  Technology", "Royal University of Bhutan" and "Celebrating 25th
-                                  Foundation Day", ending just below the gold "25"
-  src/assets/banner-wide.webp     the same on wider screens, with the full width of the artwork
-  Both end above the tagline, the dates and the buildings (the roof and water tower that reach into
-  the bottom corners are faded out).
-  src/app/opengraph-image.jpg     1200x630 share preview, centred on the logos and title
+  src/assets/banner-phone.webp    Live page banner on phones: the title, emblem and flags, without the
+                                  venue/date row (about 4 px tall at phone width) and the outer flag edges
+  src/assets/banner-wide.webp     wider screens: the whole artwork as designed
+  src/app/opengraph-image.jpg     1200x630 share preview: the centre of the artwork on its own white
   src/app/twitter-image.jpg       same image for Twitter / X
   src/assets/intro-emblem.webp    from design/jubilee-logo.png: the emblem for the intro animation (600 px)
   src/assets/intro-emblem-mask.webp   its shape only (200 px), which masks the intro's shimmer
@@ -34,42 +33,31 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-BANNER = Image.open(ROOT / "design/banner-v2.png").convert("RGB")
+BANNER = Image.open(ROOT / "design/banner.png").convert("RGB")
 
-# Regions in banner-v2.png, measured from the artwork.
-# Phone: x covers "CELEBRATING ... FOUNDATION DAY" (211-1772); y from above the logos (200) to just
-# below the gold "25" (ends 820). The building roof (from y 790, x < 460) and the water tower
-# (from y 811, x 1654-1828) reach into the bottom corners, so those two corners are faded out.
-# Measured in banner-v2.png: the logos start at y 209, the gold "25" ends at y 820 and the tagline
-# "Celebrating the Past..." starts at about y 866. Both crops end at y 840: a little room below the
-# "25", none of the tagline, dates or buildings (only their tops in the corners, faded out).
-PHONE = (185, 180, 1805, 840)  # x: "CELEBRATING ... FOUNDATION DAY" spans 211-1772
-WIDE = (0, 90, 1990, 840)  # the full width
-OG = (65, 110, 1925, 1086)  # 1200x630 proportions, centred on the logos and title
+# Regions in banner.png (1280x384), measured from the artwork: the title starts at y 36 and spans
+# x 235-1040; the emblem's ribbon and the gold line end at about y 345; the venue / opening date row
+# is y 356-375.
+PHONE = (150, 0, 1130, 350)  # title, emblem and most of both flags; no venue/date row
+WIDE = (0, 0, 1280, 384)  # the whole artwork
+OG_CROP = (205, 0, 1075, 350)  # centred on title and emblem, padded to 1200x630 with the artwork's white
 
 (ROOT / "src/assets").mkdir(exist_ok=True)
 
 
-def fade_bottom_corners(img: Image.Image, width: float, height: float) -> Image.Image:
-    """Blend the bottom-left and bottom-right corners into the artwork's white edge."""
-    w, h = img.size
-    mask = Image.new("L", (w, h), 0)
-    d = ImageDraw.Draw(mask)
-    cw, ch = round(w * width), round(h * height)
-    d.ellipse((-cw, h - ch, cw, h + ch), fill=255)
-    d.ellipse((w - cw, h - ch, w + cw, h + ch), fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(min(cw, ch) * 0.35))
-    white = Image.new("RGB", (w, h), (251, 251, 250))
-    return Image.composite(white, img, mask)
-
-
-phone = fade_bottom_corners(BANNER.crop(PHONE), width=0.2, height=0.1)
-wide = fade_bottom_corners(BANNER.crop(WIDE), width=0.22, height=0.1)
+phone = BANNER.crop(PHONE)
+wide = BANNER.crop(WIDE)
 print(f"Banner phone {phone.width}x{phone.height}, wide {wide.width}x{wide.height}: the aspect-[w/h] classes in live-banner.tsx.")
 phone.save(ROOT / "src/assets/banner-phone.webp", quality=90, method=6)
 wide.save(ROOT / "src/assets/banner-wide.webp", quality=90, method=6)
 
-og = BANNER.crop(OG).resize((1200, 630), Image.LANCZOS)
+# Share preview: platforms want 1200x630 (1.9:1); the artwork is 3.3:1, so its centre goes on a canvas
+# of its own background white rather than being stretched or losing the title.
+centre = BANNER.crop(OG_CROP)
+scale = min(1200 / centre.width, 630 / centre.height) * 0.94
+centre = centre.resize((round(centre.width * scale), round(centre.height * scale)), Image.LANCZOS)
+og = Image.new("RGB", (1200, 630), BANNER.getpixel((640, 8)))
+og.paste(centre, ((1200 - centre.width) // 2, (630 - centre.height) // 2))
 og.save(ROOT / "src/app/opengraph-image.jpg", quality=85, optimize=True, progressive=True)
 og.save(ROOT / "src/app/twitter-image.jpg", quality=85, optimize=True, progressive=True)
 

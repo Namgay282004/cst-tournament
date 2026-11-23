@@ -4,8 +4,9 @@ import { AdminHeader } from "@/components/admin/admin-header";
 import { ListSkeleton } from "@/components/skeletons";
 import { TournamentData } from "@/components/tournament-data";
 import { requireAdmin } from "@/lib/admin-auth";
+import { pageTitle } from "@/lib/brand";
 
-export const metadata: Metadata = { title: "Match control · CST Silver Jubilee Football" };
+export const metadata: Metadata = { title: pageTitle("Match control") };
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
