@@ -1,0 +1,267 @@
+"use client";
+
+import { usePathname, useSearchParams } from "next/navigation";
+import { useCallback, useId, useState } from "react";
+import { formatDay, formatTime } from "@/lib/format";
+import {
+  eventsForMatch,
+  isFinished,
+  isLive,
+  groupOfficials,
+  slotDisplayName,
+  tieLabel,
+  subsForMatch,
+  type Match,
+  teamManagers,
+} from "@/lib/tournament";
+import { teamShort } from "@/data/team-names";
+import { MatchTimeline, ScorerColumns } from "../event-list";
+import { GroupTag } from "../group-tag";
+import { cardNote, Matchup } from "../live/live-hero";
+import { StageLabel } from "../stage-label";
+import { ShootoutCircles, ShootoutKicks } from "../shootout";
+import { ManOfTheMatchSection } from "../man-of-the-match";
+import { Sheet } from "../sheet";
+import { useServerNow, useTournament } from "../tournament-provider";
+import { useResolvedSides } from "../use-resolved-sides";
+import { MatchSheetContext } from "./context";
+import { PlayersPanel } from "./players-panel";
+import { Sponsors } from "../sponsors";
+import { LivePill } from "../live-pill";
+import { isPostponed } from "@/lib/tournament";
+import { wasLabel } from "../schedule-note";
+import { isAbandoned } from "@/lib/tournament";
+import { continuesLabel, stoppageLabel } from "../stoppage-note";
+
+/** One match detail sheet for the public pages; any match opens it via useMatchSheet(). */
+export function MatchSheetProvider({ children }: { children: React.ReactNode }) {
+  const { matchesById, teamsById } = useTournament();
+  // The sheet belongs to the page it was opened on: navigating (a team link, Back) closes it.
+  const location = `${usePathname()}?${useSearchParams().toString()}`;
+  const [opened, setOpened] = useState<{ id: number; at: string } | null>(null);
+  const open = useCallback((id: number) => setOpened({ id, at: location }), [location]);
+  const close = useCallback(() => setOpened(null), []);
+  const match = opened && opened.at === location ? matchesById.get(opened.id) : undefined;
+  const team = (id: number | null) => (id != null ? teamsById.get(id)?.name : undefined); // dialog title, read aloud
+  const title = match ? `Match ${match.id}: ${team(match.home_team_id) ?? "TBD"} v ${team(match.away_team_id) ?? "TBD"}` : "Match";
+
+  return (
+    <MatchSheetContext.Provider value={open}>
+      {children}
+      <Sheet open={!!match} onClose={close} title={title} hideTitle>
+        {/* Keyed so the tab resets when another match opens. */}
+        {match && <MatchDetail key={match.id} match={match} onLeave={close} />}
+      </Sheet>
+    </MatchSheetContext.Provider>
+  );
+}
+
+type Tab = "summary" | "players";
+
+function MatchDetail({ match, onLeave }: { match: Match; onLeave: () => void }) {
+  const { teamsById, events, playersById } = useTournament();
+  const sides = useResolvedSides(match);
+  const [tab, setTab] = useState<Tab>("summary");
+  const tabsId = useId();
+  const home = match.home_team_id != null ? teamsById.get(match.home_team_id) : undefined;
+  const away = match.away_team_id != null ? teamsById.get(match.away_team_id) : undefined;
+  const started = isLive(match) || isFinished(match) || isAbandoned(match);
+
+  return (
+    // Any link inside (a team's matches) leaves the sheet, even if it points at the current page.
+    <div onClickCapture={(e) => (e.target as Element).closest("a[href]") && onLeave()}>
+      {/* Knockouts: the stage centred above, as the sheet's label. */}
+      {!match.group_code && (
+        <p className="mb-2 text-center">
+          <StageLabel match={match} />
+        </p>
+      )}
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex min-w-0 items-center gap-2 text-xs font-medium text-muted">
+          {match.group_code ? (
+            <>
+              <GroupTag group={match.group_code} />
+              <span aria-hidden="true">·</span>
+            </>
+          ) : (
+            tieLabel(match) && (
+              <>
+                <span className="font-semibold">{tieLabel(match)}</span>
+                <span aria-hidden="true">·</span>
+              </>
+            )
+          )}
+          <span className="tabular">Match {match.id}</span>
+        </span>
+        <Status match={match} />
+      </div>
+
+      <Matchup
+        className="mt-4"
+        matchId={match.id}
+        home={home}
+        away={away}
+        placeholders={{ home: sides.home.placeholder, away: sides.away.placeholder }}
+        linkTeams
+        center={
+          started ? (
+            <p className="flex items-center font-display text-[52px] leading-none font-bold tabular" aria-label={`Score ${match.home_score} to ${match.away_score}`}>
+              <span className="px-1">{match.home_score}</span>
+              <span className="mx-1 h-1 w-3 rounded-full bg-accent/50" aria-hidden="true" />
+              <span className="px-1">{match.away_score}</span>
+            </p>
+          ) : (
+            <span className="px-3 font-display text-lg font-semibold text-muted">vs</span>
+          )
+        }
+      />
+      {cardNote(match) && <p className="mt-1 text-center text-sm font-semibold text-muted tabular">{cardNote(match)}</p>}
+      <ShootoutCircles match={match} className="mx-auto mt-3 max-w-xs" />
+      <ScorerColumns events={eventsForMatch(match, events, playersById, teamsById)} className="mt-4" />
+
+      <div role="tablist" aria-label="Match details" className="mt-5 grid grid-cols-2 gap-1 rounded-xl bg-bg p-1 ring-1 ring-border">
+        {(["summary", "players"] as const).map((t) => (
+          <button
+            key={t}
+            id={`${tabsId}-${t}`}
+            role="tab"
+            type="button"
+            aria-selected={tab === t}
+            aria-controls={`${tabsId}-panel`}
+            onClick={() => setTab(t)}
+            className={`h-10 rounded-lg font-display text-[15px] font-bold transition-colors ${
+              tab === t ? "bg-brand text-white shadow-sm" : "text-muted active:bg-card"
+            }`}
+          >
+            {t === "summary" ? "Summary" : "Players"}
+          </button>
+        ))}
+      </div>
+
+      <div id={`${tabsId}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${tab}`} className="mt-4">
+        {tab === "summary" ? <SummaryPanel match={match} /> : <PlayersPanel match={match} home={home} away={away} />}
+      </div>
+      <Sponsors place="sheet" className="mt-6 border-t border-border pt-3" />
+    </div>
+  );
+}
+
+function Status({ match }: { match: Match }) {
+  if (isLive(match)) return <LivePill match={match} size="md" />;
+  if (isFinished(match)) return <span className="shrink-0 font-display text-sm font-semibold text-muted">Full time</span>;
+  if (isAbandoned(match)) return <span className="shrink-0 text-xs font-semibold">Abandoned</span>;
+  if (isPostponed(match)) return <span className="shrink-0 text-xs font-semibold">Postponed</span>;
+  return (
+    <span className="shrink-0 text-xs font-semibold text-muted tabular">
+      {formatDay(match.kickoff_at)} · {formatTime(match.kickoff_at)}
+    </span>
+  );
+}
+
+function SummaryPanel({ match }: { match: Match }) {
+  const { events, playersById, teamsById, substitutions, officials, staff } = useTournament();
+  const managers = [match.home_team_id, match.away_team_id]
+    .map((id) => (id != null ? teamsById.get(id) : undefined))
+    .filter((t) => t != null)
+    .map((team) => ({ team, names: teamManagers(staff, team.id).map((s) => s.name) }))
+    .filter((m) => m.names.length > 0);
+  const officialGroups = groupOfficials(officials, match.id);
+  const now = useServerNow(60_000);
+  const matchEvents = eventsForMatch(match, events, playersById, teamsById);
+  const matchSubs = subsForMatch(match, substitutions, playersById);
+  const started = isLive(match) || isFinished(match) || isAbandoned(match);
+
+  return (
+    <div className="space-y-4">
+      <ManOfTheMatchSection match={match} />
+      {matchEvents.length > 0 || matchSubs.length > 0 ? (
+        <MatchTimeline match={match} events={matchEvents} subs={matchSubs} />
+      ) : (
+        <p className="rounded-xl bg-bg px-4 py-4 text-center text-sm text-muted">
+          {started
+            ? "No goals or cards recorded."
+            : Date.parse(match.kickoff_at) <= now
+              ? "Result to come. Goals and cards will appear here once it is entered."
+              : "Goals and cards will appear here once the match starts."}
+        </p>
+      )}
+      <ShootoutKicks match={match} />
+      {officialGroups.length > 0 && (
+        <section aria-labelledby="officials-title">
+          <h3 id="officials-title" className="mb-2 px-1 text-xs font-bold text-muted">
+            Officials
+          </h3>
+          <dl className="divide-y divide-border rounded-xl text-sm ring-1 ring-border">
+            {officialGroups.map((g) => (
+              <div key={g.label} className="flex items-baseline justify-between gap-4 px-4 py-2.5">
+                <dt className="shrink-0 text-muted">{g.label}</dt>
+                <dd className="min-w-0 text-right font-medium">
+                  {g.names.map((n, i) => (
+                    <span key={i} className="block">
+                      {n}
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+      {/* Each team's manager(s), from its team staff; a team without one is left out. */}
+      {managers.length > 0 && (
+        <section aria-labelledby="managers-title">
+          <h3 id="managers-title" className="mb-2 px-1 text-xs font-bold text-muted">
+            Team managers
+          </h3>
+          <dl className="divide-y divide-border rounded-xl text-sm ring-1 ring-border">
+            {managers.map((m) => (
+              <div key={m.team.id} className="flex items-baseline justify-between gap-4 px-4 py-2.5">
+                <dt className="shrink-0 text-muted">{teamShort(m.team)}</dt>
+                <dd className="min-w-0 text-right font-medium">
+                  {m.names.map((n, i) => (
+                    <span key={i} className="block">
+                      {n}
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+      <dl className="divide-y divide-border rounded-xl text-sm ring-1 ring-border">
+        <Info label="Kick-off">
+          {isPostponed(match) ? "Postponed, new time to be announced" : `${formatDay(match.kickoff_at)} · ${formatTime(match.kickoff_at)}`}
+        </Info>
+        {match.stoppage && (
+          <Info label="Stopped">
+            <span className="block">{stoppageLabel(match).replace(/^\w+ at /, "")}</span>
+            {match.stoppage.abandoned && <span className="block text-muted">{continuesLabel(match)}</span>}
+          </Info>
+        )}
+        {match.schedule && (
+          <Info label={match.schedule.postponed ? "Was" : "Rescheduled"}>
+            <span className="block">{match.schedule.postponed ? wasLabel(match) : `was ${wasLabel(match)}`}</span>
+            {match.schedule.reason && <span className="block text-muted">{match.schedule.reason}</span>}
+          </Info>
+        )}
+        <Info label="Venue">CST Artificial Turf</Info>
+        <Info label="Stage">{stageLabel(match)}</Info>
+      </dl>
+    </div>
+  );
+}
+
+function Info({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 px-4 py-2.5">
+      <dt className="text-muted">{label}</dt>
+      <dd className="text-right font-medium tabular">{children}</dd>
+    </div>
+  );
+}
+
+function stageLabel(match: Match): string {
+  if (match.group_code) return `Group ${match.group_code}`;
+  return match.slot_label ? slotDisplayName(match.slot_label) : "Knockout";
+}

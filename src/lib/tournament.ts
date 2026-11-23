@@ -1,0 +1,1552 @@
+// All tournament logic: standings, qualification, knockout resolution, match clock.
+// Pure functions only, shared by server components, client components and scripts.
+import type { Database } from "./supabase/database.types";
+import { teamShort } from "../data/team-names";
+
+type Tables = Database["public"]["Tables"];
+type Enums = Database["public"]["Enums"];
+
+export type Team = Pick<Tables["teams"]["Row"], "id" | "slot" | "group_code" | "short_code" | "name" | "tiebreak_rank"> & {
+  /** Display names set by the admin (team_display_names); absent: src/data/team-names.ts is used. */
+  display?: { short: string; full: string | null };
+};
+export type Match = Tables["matches"]["Row"] & {
+  /** Kick-off changes (kickoff_changes): postponed, or moved from another time. Absent: as scheduled. */
+  schedule?: MatchSchedule;
+  /** Play stopped and not yet resumed or restarted (match_stoppages). Absent: no stoppage. */
+  stoppage?: MatchStoppage;
+  /** Extra time of this second half (match_extra_time). Absent: none (or left over from before a reset). */
+  extraTime?: MatchExtraTime;
+  /** The penalty shoot-out kick by kick (penalty_kicks), when its kicks add up to the penalty score. */
+  shootout?: { firstTeamId: number; kicks: PenaltyKick[] };
+  /** Man of the Match (knockout matches; man_of_the_match). Absent: not chosen. */
+  manOfTheMatch?: ManOfTheMatch;
+};
+
+/**
+ * Man of the Match of a knockout match: a squad player (player_id), or a typed name. The name and
+ * number are stored with it either way, for when the player is no longer in the squad.
+ */
+export type ManOfTheMatch = {
+  match_id: number;
+  team_id: number;
+  player_id: string | null;
+  name: string;
+  shirt_number: number | null;
+};
+
+/** Matches with their Man of the Match attached. */
+export function withManOfTheMatch(matches: Match[], rows: ManOfTheMatch[]): Match[] {
+  if (!rows.length) return matches;
+  const byMatch = new Map(rows.map((r) => [r.match_id, r]));
+  return matches.map((m) => (byMatch.has(m.id) ? { ...m, manOfTheMatch: byMatch.get(m.id) } : m));
+}
+
+/** "#10 Sonam Wangchuk": the squad's current name and number while the player exists, else as stored. */
+export function manOfTheMatchName(motm: ManOfTheMatch, playersById: Map<string, Player>): string {
+  const p = motm.player_id ? playersById.get(motm.player_id) : undefined;
+  const name = p?.name ?? motm.name;
+  const number = p ? p.shirt_number : motm.shirt_number;
+  return `${number != null ? `#${shirtLabel(number)} ` : ""}${name}`;
+}
+
+/** One kick of a penalty shoot-out. The shoot-out score itself stays in home_pens / away_pens. */
+export type PenaltyKick = {
+  id: number;
+  match_id: number;
+  team_id: number;
+  kick_no: number;
+  player_id: string | null;
+  taker_name: string | null;
+  taker_number: number | null;
+  scored: boolean;
+};
+export type PenaltyShootout = { match_id: number; first_team_id: number };
+
+/**
+ * Extra time of a knockout match, length chosen by the admin. The match keeps status "second_half"
+ * during extra time; phase: pre (the break before extra time, from extra_time_breaks: the clock
+ * stopped at the end of normal time), first (or only) period, break, second period, over (finished or
+ * level and going to penalties).
+ */
+export type MatchExtraTime = {
+  match_id: number;
+  half_minutes: number;
+  periods: number;
+  phase: "pre" | "first" | "break" | "second" | "over";
+  phase_started_at: string | null;
+  second_half_started_at: string;
+  /** Phase "pre" only: when the break began (the clock shows the minute reached then). */
+  break_started_at?: string;
+};
+/** A break before extra time (extra_time_breaks); its own undo history (undone_at). */
+export type ExtraTimeBreak = {
+  id: number;
+  match_id: number;
+  half_minutes: number;
+  periods: number;
+  second_half_started_at: string;
+  started_at: string;
+  undone_at: string | null;
+};
+export type MatchStoppage = {
+  id: number;
+  match_id: number;
+  at_minute: number;
+  half: "first_half" | "second_half";
+  home_score: number;
+  away_score: number;
+  reason: string | null;
+  abandoned: boolean;
+  resume_at: string | null;
+  outcome: "resumed" | "restarted" | null;
+};
+export type MatchSchedule = {
+  /** Postponed, new time to be announced (kickoff_at still holds the old time). */
+  postponed: boolean;
+  /** The kick-off announced before the first change, for "Rescheduled · was Fri 9 Oct, 8:00 PM". */
+  was: string;
+  /** The latest reason given, e.g. "Floodlight failure". */
+  reason: string | null;
+};
+export type KickoffChange = {
+  id: number;
+  match_id: number;
+  old_kickoff: string;
+  new_kickoff: string | null;
+  reason: string | null;
+  undone_at: string | null;
+  created_at: string;
+};
+export type Notice = {
+  id: number;
+  message: string;
+  level: "info" | "important";
+  starts_at: string;
+  ends_at: string;
+  /** When it was posted or last edited (shown to fans in the announcements sheet). */
+  updated_at?: string;
+};
+export type MatchEvent = Pick<
+  Tables["match_events"]["Row"],
+  "id" | "match_id" | "type" | "team_id" | "player_id" | "minute" | "added_time" | "client_id"
+>;
+export type Player = Pick<Tables["players"]["Row"], "id" | "team_id" | "name" | "shirt_number">;
+export type OfficialRole = "referee" | "assistant_referee" | "fourth_official" | "match_commissioner" | "other";
+export type Official = { id: number; match_id: number; role: OfficialRole; custom_role: string | null; name: string; position: number };
+export type Substitution = Pick<
+  Tables["substitutions"]["Row"],
+  "id" | "match_id" | "team_id" | "player_off" | "player_on" | "minute" | "added_time" | "client_id"
+>;
+export type StaffRole = "manager" | "coach" | "assistant_coach" | "other";
+export type TeamStaff = { id: number; team_id: number; role: StaffRole; custom_role: string | null; name: string; position: number; is_demo: boolean };
+export type TeamDisplayName = { id: number; team_id: number; short_name: string; full_name: string | null; is_demo: boolean };
+export type ResultHold = { match_id: number; finished_at: string; hold_until: string | null };
+export type EventType = Enums["event_type"];
+export type MatchStatus = Enums["match_status"];
+export type MatchStage = Enums["match_stage"];
+export type Side = "home" | "away";
+
+export type Snapshot = {
+  teams: Team[];
+  matches: Match[];
+  events: MatchEvent[];
+  players: Player[];
+  substitutions: Substitution[];
+  officials: Official[];
+  staff: TeamStaff[];
+  displayNames: TeamDisplayName[];
+  resultHolds: ResultHold[];
+  kickoffChanges: KickoffChange[];
+  notices: Notice[];
+  stoppages: MatchStoppage[];
+  kits: TeamKit[];
+  extraTimes: MatchExtraTime[];
+  shootouts: PenaltyShootout[];
+  kicks: PenaltyKick[];
+  /** Optional: a snapshot cached before these tables existed has neither. */
+  etBreaks?: ExtraTimeBreak[];
+  motms?: ManOfTheMatch[];
+};
+
+/**
+ * Matches with their shoot-out kicks attached, during or after penalties, only when the kicks add up
+ * to the penalty score (a score entered directly, or kicks left from an undone shoot-out, show no kicks).
+ */
+export function withShootouts(matches: Match[], shootouts: PenaltyShootout[], kicks: PenaltyKick[]): Match[] {
+  if (!shootouts.length) return matches;
+  const byMatch = new Map(shootouts.map((x) => [x.match_id, x]));
+  return matches.map((m) => {
+    const so = byMatch.get(m.id);
+    if (!so || (m.status !== "penalties" && m.status !== "finished") || m.home_pens == null || m.away_pens == null) return m;
+    const mine = kicks.filter((k) => k.match_id === m.id).sort((a, b) => a.kick_no - b.kick_no);
+    const scored = (team: number | null) => mine.filter((k) => k.team_id === team && k.scored).length;
+    if (scored(m.home_team_id) !== m.home_pens || scored(m.away_team_id) !== m.away_pens) return m;
+    return { ...m, shootout: { firstTeamId: so.first_team_id, kicks: mine } };
+  });
+}
+
+/** The team to take the next kick: teams alternate from the one that kicked first. */
+export function nextKickTeam(match: Pick<Match, "home_team_id" | "away_team_id" | "shootout">): number | null {
+  const so = match.shootout;
+  if (!so) return null;
+  const other = so.firstTeamId === match.home_team_id ? match.away_team_id : match.home_team_id;
+  return so.kicks.length % 2 === 0 ? so.firstTeamId : other;
+}
+
+/** "#10 Sonam Wangchuk", "Karma (7)" for a typed name, or "Taker not recorded". */
+export function kickTaker(kick: PenaltyKick, playersById: Map<string, Player>): string {
+  const p = kick.player_id ? playersById.get(kick.player_id) : undefined;
+  if (p) return `${p.shirt_number != null ? `#${shirtLabel(p.shirt_number)} ` : ""}${p.name}`;
+  if (kick.taker_name) return `${kick.taker_number != null ? `#${shirtLabel(kick.taker_number)} ` : ""}${kick.taker_name}`;
+  return "Taker not recorded";
+}
+
+/**
+ * Matches with their extra time attached, when it belongs to the second half that was played. With
+ * no extra time yet, an open break before extra time of this second half shows as phase "pre".
+ */
+export function withExtraTime(matches: Match[], rows: MatchExtraTime[], breaks: ExtraTimeBreak[] = []): Match[] {
+  if (!rows.length && !breaks.length) return matches;
+  const byMatch = new Map(rows.map((r) => [r.match_id, r]));
+  return matches.map((m) => {
+    if (!["second_half", "penalties", "finished"].includes(m.status) || !m.period_started_at) return m;
+    const sameHalf = (at: string) => Date.parse(at) === Date.parse(m.period_started_at!);
+    const et = byMatch.get(m.id);
+    if (et && sameHalf(et.second_half_started_at)) return { ...m, extraTime: et };
+    if (m.status !== "second_half") return m;
+    const open = breaks.filter((b) => b.match_id === m.id && !b.undone_at && sameHalf(b.second_half_started_at)).sort((a, b) => b.id - a.id)[0];
+    if (!open) return m;
+    return {
+      ...m,
+      extraTime: {
+        match_id: m.id,
+        half_minutes: open.half_minutes,
+        periods: open.periods,
+        phase: "pre",
+        phase_started_at: null,
+        second_half_started_at: open.second_half_started_at,
+        break_started_at: open.started_at,
+      },
+    };
+  });
+}
+
+/** In the break before extra time: normal time is over, extra time is next. */
+export function isExtraTimeNext(match: Pick<Match, "status" | "extraTime">): boolean {
+  return match.status === "second_half" && match.extraTime?.phase === "pre";
+}
+
+/** A period of extra time is being played (the clock runs from 91'). */
+export function isExtraTimeInPlay(match: Pick<Match, "status" | "extraTime">): boolean {
+  return match.status === "second_half" && (match.extraTime?.phase === "first" || match.extraTime?.phase === "second");
+}
+
+/** In extra time (the break before it, being played, at its break, or just finished and level), not yet at penalties. */
+export function isInExtraTime(match: Pick<Match, "status" | "extraTime">): boolean {
+  return match.status === "second_half" && !!match.extraTime;
+}
+
+/** Knockout, second half in play, level, no extra time yet: the admin may start extra time. */
+export function canStartExtraTime(match: Pick<Match, "stage" | "status" | "extraTime" | "stoppage" | "home_score" | "away_score">): boolean {
+  return match.stage !== "group" && match.status === "second_half" && !match.extraTime && !match.stoppage && match.home_score === match.away_score;
+}
+
+/** The last minute of a match with this extra time (90, or 90 + its length). */
+export function lastMinute(extraTime?: Pick<MatchExtraTime, "half_minutes" | "periods"> | null): number {
+  return HALF_LENGTH_MINUTES * 2 + (extraTime ? extraTime.half_minutes * extraTime.periods : 0);
+}
+
+/** Decided after extra time (finished, or at penalties after it). */
+export function wentToExtraTime(match: Pick<Match, "status" | "extraTime">): boolean {
+  return match.extraTime?.phase === "over" && (match.status === "finished" || match.status === "penalties");
+}
+
+/** "a.e.t.", "a.e.t., 4–3 pens", "4–3 pens", or null: the note beside a knockout result. */
+export function resultNote(match: Pick<Match, "status" | "extraTime" | "home_pens" | "away_pens">): string | null {
+  const pens = match.home_pens != null && match.away_pens != null ? `${match.home_pens}–${match.away_pens} pens` : null;
+  if (wentToExtraTime(match)) return pens ? `a.e.t., ${pens}` : "a.e.t.";
+  return pens;
+}
+
+// ---------------------------------------------------------------------------
+// Team kits (shirt and shorts colours, shown as a small shirt next to team names)
+// ---------------------------------------------------------------------------
+
+/** A team's kit colours ('#RRGGBB'). match_id null: its usual kit; otherwise the kit for that match. */
+export type TeamKit = {
+  id: number;
+  team_id: number;
+  match_id: number | null;
+  shirt: string;
+  shirt2: string | null;
+  pattern: "stripes" | "halves" | null;
+  shorts: string;
+};
+
+/** The kit a team wears: the one set for this match, else its usual kit, else none (no icon). */
+export function kitFor(kits: TeamKit[], teamId: number | null | undefined, matchId?: number | null): TeamKit | null {
+  if (teamId == null) return null;
+  return (
+    (matchId != null ? kits.find((k) => k.team_id === teamId && k.match_id === matchId) : undefined) ??
+    kits.find((k) => k.team_id === teamId && k.match_id == null) ??
+    null
+  );
+}
+
+const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+/** Light enough to vanish on a white card: such colours get a thin outline. */
+export function isLightColour(hex: string): boolean {
+  const [r, g, b] = rgb(hex).map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.7;
+}
+
+// Plain names for the spoken label: the nearest of these (by perceived distance).
+const COLOUR_NAMES: [string, string][] = [
+  ["black", "#000000"], ["white", "#FFFFFF"], ["grey", "#808080"], ["light grey", "#C8C8C8"], ["dark grey", "#404040"],
+  ["red", "#D32F2F"], ["maroon", "#7B1E2B"], ["pink", "#F06292"], ["orange", "#F57C00"], ["yellow", "#FBC02D"],
+  ["gold", "#C9A227"], ["cream", "#F3E5C0"], ["brown", "#6D4C41"], ["green", "#2E7D32"], ["light green", "#8BC34A"],
+  ["dark green", "#1B4D2E"], ["teal", "#00897B"], ["sky blue", "#64B5F6"], ["blue", "#1E5BC6"], ["navy", "#1A2A5A"],
+  ["purple", "#6A1B9A"], ["lilac", "#B39DDB"],
+];
+
+/** "blue", "navy", "white": the nearest plain colour name. */
+export function colourName(hex: string): string {
+  const [r, g, b] = rgb(hex);
+  let best = COLOUR_NAMES[0][0];
+  let bestD = Infinity;
+  for (const [name, h] of COLOUR_NAMES) {
+    const [r2, g2, b2] = rgb(h);
+    const rm = (r + r2) / 2;
+    const d = (2 + rm / 256) * (r - r2) ** 2 + 4 * (g - g2) ** 2 + (2 + (255 - rm) / 256) * (b - b2) ** 2;
+    if (d < bestD) [best, bestD] = [name, d];
+  }
+  return best;
+}
+
+/** "Kit: blue shirt, white shorts", "Kit: red and white striped shirt, black shorts". */
+export function kitLabel(kit: Pick<TeamKit, "shirt" | "shirt2" | "pattern" | "shorts">): string {
+  const shirt = kit.shirt2 && kit.pattern
+    ? `${colourName(kit.shirt)} and ${colourName(kit.shirt2)} ${kit.pattern === "stripes" ? "striped" : "halved"} shirt`
+    : `${colourName(kit.shirt)} shirt`;
+  return `Kit: ${shirt}, ${colourName(kit.shorts)} shorts`;
+}
+
+/** Matches with their open stoppage (if any) attached. */
+export function withStoppages(matches: Match[], stoppages: MatchStoppage[]): Match[] {
+  const open = new Map(stoppages.filter((s) => s.outcome == null).map((s) => [s.match_id, s]));
+  if (!open.size) return matches;
+  return matches.map((m) => (open.has(m.id) ? { ...m, stoppage: open.get(m.id) } : m));
+}
+
+/** Play suspended (power cut, weather...), expected to restart today: the clock is stopped. */
+export function isSuspended(match: Pick<Match, "stoppage">): boolean {
+  return !!match.stoppage && !match.stoppage.abandoned;
+}
+
+/**
+ * A water break: play suspended with the reason "Water break" (any case). Only the wording changes
+ * (calm "Water break 25'" instead of "Suspended"); the clock is frozen and resumes like any suspension.
+ */
+export const WATER_BREAK_REASON = "Water break";
+export function isWaterBreak(match: Pick<Match, "stoppage">): boolean {
+  return isSuspended(match) && match.stoppage?.reason?.trim().toLowerCase() === WATER_BREAK_REASON.toLowerCase();
+}
+
+/** Abandoned for today: to be resumed or started again later. Not live, listed as upcoming. */
+export function isAbandoned(match: Pick<Match, "stoppage">): boolean {
+  return !!match.stoppage?.abandoned;
+}
+
+/** The minute play stopped at, as the clock shows it: "37'", "45+2'". */
+export function stoppageMinuteLabel(s: Pick<MatchStoppage, "at_minute" | "half">): string {
+  const end = s.half === "first_half" ? HALF_LENGTH_MINUTES : HALF_LENGTH_MINUTES * 2;
+  return s.at_minute > end ? `${end}+${s.at_minute - end}'` : `${s.at_minute}'`;
+}
+
+/** Matches with their schedule state attached from the kick-off changes that haven't been undone. */
+export function withSchedule(matches: Match[], changes: KickoffChange[]): Match[] {
+  const open = new Map<number, KickoffChange[]>();
+  for (const c of changes) if (!c.undone_at) open.set(c.match_id, [...(open.get(c.match_id) ?? []), c]);
+  if (!open.size) return matches;
+  return matches.map((m) => {
+    const list = open.get(m.id)?.sort((a, b) => a.id - b.id);
+    if (!list) return m;
+    const latest = list[list.length - 1];
+    const reason = [...list].reverse().find((c) => c.reason)?.reason ?? null;
+    return { ...m, schedule: { postponed: latest.new_kickoff == null, was: list[0].old_kickoff, reason } };
+  });
+}
+
+export function isPostponed(match: Pick<Match, "status" | "schedule">): boolean {
+  return match.status === "scheduled" && !!match.schedule?.postponed;
+}
+
+/** Notices showing now, important first (all, or only the important ones), newest first within each. */
+export function activeNotices(notices: Notice[], now: number, importantOnly: boolean): Notice[] {
+  return notices
+    .filter((n) => Date.parse(n.starts_at) <= now && now < Date.parse(n.ends_at) && (!importantOnly || n.level === "important"))
+    .sort((a, b) => (a.level === b.level ? b.starts_at.localeCompare(a.starts_at) : a.level === "important" ? -1 : 1));
+}
+
+/**
+ * How long a finished match stays the main card on the Live page, by default. The admin can extend
+ * it (+5 min, up to 60 minutes after full time) or end it ("Show next match now"): result_holds.hold_until.
+ */
+export const RESULT_HOLD_MINUTES = 5;
+
+/** When a match's result stops being held on the Live page (ms, server time). */
+export function resultHoldEnd(hold: ResultHold): number {
+  return hold.hold_until ? Date.parse(hold.hold_until) : Date.parse(hold.finished_at) + RESULT_HOLD_MINUTES * 60_000;
+}
+
+/** The finished match whose result is still being held at `now`, if any (the most recently finished). */
+export function heldResult(matches: Match[], holds: ResultHold[], now: number): Match | null {
+  let best: { match: Match; finished: number } | null = null;
+  for (const h of holds) {
+    const m = matches.find((x) => x.id === h.match_id);
+    if (!m || m.status !== "finished" || resultHoldEnd(h) <= now) continue;
+    const finished = Date.parse(h.finished_at);
+    if (!best || finished > best.finished) best = { match: m, finished };
+  }
+  return best?.match ?? null;
+}
+
+/** Staff roles in their standard order, with labels. */
+export const STAFF_ROLES: { role: StaffRole; label: string; plural: string }[] = [
+  { role: "manager", label: "Manager", plural: "Managers" },
+  { role: "coach", label: "Coach", plural: "Coaches" },
+  { role: "assistant_coach", label: "Assistant coach", plural: "Assistant coaches" },
+  { role: "other", label: "Other", plural: "Other" },
+];
+
+/** A team's staff as lines in the standard role order: "Manager: Sonam Dorji", "Coaches: A, B". Demo rows, when present, replace the real ones (testing). */
+export function staffLines(staff: TeamStaff[], teamId: number): { label: string; names: string[] }[] {
+  const mine = staff.filter((s) => s.team_id === teamId);
+  const rows = mine.some((s) => s.is_demo) ? mine.filter((s) => s.is_demo) : mine;
+  const lines = new Map<string, string[]>();
+  const sorted = [...rows].sort((a, b) => STAFF_ROLES.findIndex((r) => r.role === a.role) - STAFF_ROLES.findIndex((r) => r.role === b.role) || a.position - b.position);
+  for (const s of sorted) {
+    const key = s.role === "other" ? (s.custom_role ?? "Other") : s.role;
+    lines.set(key, [...(lines.get(key) ?? []), s.name]);
+  }
+  return [...lines].map(([key, names]) => {
+    const role = STAFF_ROLES.find((r) => r.role === key);
+    return { label: role ? (names.length > 1 ? role.plural : role.label) : key, names };
+  });
+}
+
+/** A team's managers in their saved order (demo rows, when present, replace the real ones: testing). */
+export function teamManagers(staff: TeamStaff[], teamId: number): TeamStaff[] {
+  const mine = staff.filter((s) => s.team_id === teamId);
+  const rows = mine.some((s) => s.is_demo) ? mine.filter((s) => s.is_demo) : mine;
+  return rows.filter((s) => s.role === "manager").sort((a, b) => a.position - b.position);
+}
+
+/** Teams with the admin's display names attached (a demo row, when present, wins: testing). */
+export function withDisplayNames(teams: Team[], rows: TeamDisplayName[]): Team[] {
+  const byTeam = new Map<number, TeamDisplayName>();
+  for (const r of rows) if (!byTeam.has(r.team_id) || r.is_demo) byTeam.set(r.team_id, r);
+  return teams.map((t) => {
+    const r = byTeam.get(t.id);
+    return r ? { ...t, display: { short: r.short_name, full: r.full_name } } : t;
+  });
+}
+
+/** Officials' roles in the standard order, with their labels. */
+export const OFFICIAL_ROLES: { role: OfficialRole; label: string; plural: string }[] = [
+  { role: "referee", label: "Referee", plural: "Referees" },
+  { role: "assistant_referee", label: "Assistant referee", plural: "Assistant referees" },
+  { role: "fourth_official", label: "Fourth official", plural: "Fourth officials" },
+  { role: "match_commissioner", label: "Match commissioner", plural: "Match commissioners" },
+  { role: "other", label: "Other", plural: "Other" },
+];
+
+/**
+ * A match's officials grouped in the standard order (Referee, Assistant referees, Fourth official,
+ * Match commissioner, then each "Other" under its own label), keeping the admin's order within a group.
+ */
+export function groupOfficials(officials: Official[], matchId: number): { label: string; names: string[] }[] {
+  const mine = officials.filter((o) => o.match_id === matchId).sort((a, b) => a.position - b.position);
+  const groups: { label: string; names: string[] }[] = [];
+  for (const r of OFFICIAL_ROLES) {
+    const list = mine.filter((o) => o.role === r.role);
+    if (!list.length) continue;
+    if (r.role === "other") {
+      for (const o of list) {
+        const label = o.custom_role || "Other";
+        const g = groups.find((x) => x.label === label);
+        if (g) g.names.push(o.name);
+        else groups.push({ label, names: [o.name] });
+      }
+    } else groups.push({ label: list.length > 1 ? r.plural : r.label, names: list.map((o) => o.name) });
+  }
+  return groups;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Length of one half in minutes. To be confirmed with the organisers. */
+export const HALF_LENGTH_MINUTES = 45;
+export const POINTS_FOR_WIN = 3;
+export const POINTS_FOR_DRAW = 1;
+export const QUALIFIERS_PER_GROUP = 2;
+export const GROUP_CODES = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+export type GroupCode = (typeof GROUP_CODES)[number];
+
+const LIVE_STATUSES: readonly MatchStatus[] = ["first_half", "half_time", "second_half", "penalties"];
+
+/** A half is being played (the clock runs). Not at half-time, penalties, a stoppage, or before/after the match. */
+export function isBallInPlay(match: Pick<Match, "status" | "stoppage" | "extraTime">): boolean {
+  if (match.stoppage) return false;
+  // Extra time: only while a period is played (not at its break, nor once it is over).
+  if (match.status === "second_half" && match.extraTime) return isExtraTimeInPlay(match);
+  return match.status === "first_half" || match.status === "second_half";
+}
+
+export function isLive(match: Pick<Match, "status" | "stoppage">): boolean {
+  // Abandoned for today: not live (it continues or starts again another time).
+  return LIVE_STATUSES.includes(match.status) && !match.stoppage?.abandoned;
+}
+
+export function isFinished(match: Pick<Match, "status">): boolean {
+  return match.status === "finished";
+}
+
+/**
+ * A match still "not started" this long after kick-off is a result nobody has entered yet:
+ * it is no longer shown as upcoming.
+ */
+export const RESULT_PENDING_AFTER_MS = 3 * 60 * 60 * 1000;
+
+/** Not started, and not so long past kick-off that it is really a missing result. A postponed match is always upcoming. */
+export function isUpcoming(match: Pick<Match, "status" | "kickoff_at" | "schedule" | "stoppage">, now: number): boolean {
+  if (isPostponed(match) || isAbandoned(match)) return true;
+  return match.status === "scheduled" && Date.parse(match.kickoff_at) > now - RESULT_PENDING_AFTER_MS;
+}
+
+export function isKnockout(match: Pick<Match, "stage">): boolean {
+  return match.stage !== "group";
+}
+
+// ---------------------------------------------------------------------------
+// Match clock
+// ---------------------------------------------------------------------------
+
+export type MatchClock = {
+  /** Short label for display: 23', 45+2', HT, 90+3', Penalties, FT; ET break, End of ET in extra time. */
+  label: string;
+  /** True while the clock is running (a half is in progress). */
+  running: boolean;
+};
+
+/**
+ * Match minute from the half's start time and a server-aligned "now" (ms).
+ * Counts like a broadcast clock: the first minute is 1', and play beyond the
+ * end of a half is shown as stoppage time (45+2', 90+3') instead of 47', 93'.
+ */
+export function matchClock(match: Pick<Match, "status" | "period_started_at" | "stoppage" | "extraTime">, now: number | null): MatchClock {
+  // Play stopped: the clock stays at the minute it stopped.
+  if (match.stoppage) return { label: stoppageMinuteLabel(match.stoppage), running: false };
+  switch (match.status) {
+    case "scheduled":
+      return { label: "", running: false };
+    case "half_time":
+      return { label: "HT", running: false };
+    case "penalties":
+      return { label: "Penalties", running: false };
+    case "finished":
+      return { label: "FT", running: false };
+  }
+
+  if (match.status === "second_half" && match.extraTime?.phase === "pre") return { label: "Extra time next", running: false };
+  if (match.status === "second_half" && match.extraTime?.phase === "break") return { label: "ET break", running: false };
+  if (match.status === "second_half" && match.extraTime?.phase === "over") return { label: "End of ET", running: false };
+  const running = runningMinute(match, now);
+  if (!running) return { label: match.status === "first_half" ? "1st half" : "2nd half", running: true };
+  // Always the actual added minutes ("45+2'", "90+17'"), the same form as event minutes elsewhere.
+  return { label: running.added > 0 ? `${running.minute}+${running.added}'` : `${running.minute}'`, running: true };
+}
+
+/** The running clock of the half in play as minute + actual stoppage (45 + 2), or null. Shared by the scoreboard and the sheets. */
+function runningMinute(match: Pick<Match, "status" | "period_started_at" | "extraTime">, now: number | null): { minute: number; added: number } | null {
+  const et = match.status === "second_half" ? match.extraTime : undefined;
+  if (et?.phase === "pre") {
+    // The break before extra time: the second-half clock stopped when the break began (90+3').
+    if (!et.break_started_at || !match.period_started_at) return null;
+    const full = HALF_LENGTH_MINUTES * 2;
+    const minute = HALF_LENGTH_MINUTES + Math.max(0, Math.floor((Date.parse(et.break_started_at) - Date.parse(match.period_started_at)) / 60_000)) + 1;
+    return minute > full ? { minute: full, added: minute - full } : { minute, added: 0 };
+  }
+  if (et) {
+    // Extra time continues from 90': with 2 x 10, 91'-100' (then 100+1') and 101'-110' (110+2').
+    if ((et.phase !== "first" && et.phase !== "second") || !et.phase_started_at || now == null) return null;
+    const start = HALF_LENGTH_MINUTES * 2 + (et.phase === "second" ? et.half_minutes : 0);
+    const end = start + et.half_minutes;
+    const minute = start + Math.max(0, Math.floor((now - Date.parse(et.phase_started_at)) / 60_000)) + 1;
+    return minute > end ? { minute: end, added: minute - end } : { minute, added: 0 };
+  }
+  if ((match.status !== "first_half" && match.status !== "second_half") || !match.period_started_at || now == null) return null;
+  const halfStart = match.status === "first_half" ? 0 : HALF_LENGTH_MINUTES;
+  const halfEnd = halfStart + HALF_LENGTH_MINUTES;
+  const minute = halfStart + Math.max(0, Math.floor((now - Date.parse(match.period_started_at)) / 60_000)) + 1;
+  return minute > halfEnd ? { minute: halfEnd, added: minute - halfEnd } : { minute, added: 0 };
+}
+
+/**
+ * The minute the admin scoreboard's clock shows, as minute + stoppage time (45 + 2), or null when no
+ * half is being played (not started, half-time, penalties, finished). Every admin sheet that pre-fills a
+ * minute (goal, own goal, card, substitution) uses this, so it always matches the clock: frozen at the
+ * stopped minute while play is suspended, and stoppage time as shown, up to the 30 minutes a minute can have.
+ */
+export function clockMinute(match: Pick<Match, "status" | "period_started_at" | "stoppage" | "extraTime">, now: number | null): { minute: number; added: number } | null {
+  if (match.stoppage) {
+    if (match.stoppage.abandoned) return null;
+    const end = match.stoppage.half === "first_half" ? HALF_LENGTH_MINUTES : HALF_LENGTH_MINUTES * 2;
+    const at = match.stoppage.at_minute;
+    return at > end ? { minute: end, added: Math.min(at - end, MAX_STOPPAGE_MINUTES) } : { minute: at, added: 0 };
+  }
+  const running = runningMinute(match, now);
+  return running && { minute: running.minute, added: Math.min(running.added, MAX_STOPPAGE_MINUTES) };
+}
+
+/** Stoppage time recorded per half at most. */
+export const MAX_STOPPAGE_MINUTES = 30;
+
+/** Minutes that end a half (45, 90, and the end of each extra-time period): the only ones that can have stoppage time. */
+export function isHalfEnd(minute: number, extraTime?: Pick<MatchExtraTime, "half_minutes" | "periods"> | null): boolean {
+  if (minute === HALF_LENGTH_MINUTES || minute === HALF_LENGTH_MINUTES * 2) return true;
+  if (!extraTime) return false;
+  const full = HALF_LENGTH_MINUTES * 2;
+  return minute === full + extraTime.half_minutes || (extraTime.periods === 2 && minute === full + extraTime.half_minutes * 2);
+}
+
+/** Why a minute can't be right, or null if it's fine. With extra time, minutes up to its end count. */
+export function minuteProblem(minute: number, added: number, extraTime?: Pick<MatchExtraTime, "half_minutes" | "periods"> | null): string | null {
+  const full = lastMinute(extraTime);
+  if (!Number.isInteger(minute) || minute < 1) return "The minute must be 1 or more.";
+  if (minute > full) {
+    return extraTime
+      ? `The match, with extra time, has ${full} minutes. For stoppage time, use ${full} and add the extra minutes.`
+      : `The match has ${full} minutes. For a goal in stoppage time, use ${full} and add the extra minutes.`;
+  }
+  if (added < 0 || !Number.isInteger(added)) return "Stoppage time must be a whole number of minutes.";
+  if (added > 0 && !isHalfEnd(minute, extraTime)) return extraTime ? "Stoppage time only goes at the end of a half or of a period of extra time." : `Stoppage time only goes after ${HALF_LENGTH_MINUTES} or ${full}.`;
+  if (added > MAX_STOPPAGE_MINUTES) return `Stoppage time can't be more than ${MAX_STOPPAGE_MINUTES} minutes.`;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Results
+// ---------------------------------------------------------------------------
+
+export type Outcome = { winner: Side; decidedOnPenalties: boolean } | { winner: null; decidedOnPenalties: false };
+
+/** Result of a finished match. Knockout draws are decided on penalties. */
+export function matchOutcome(match: Match): Outcome | null {
+  if (!isFinished(match)) return null;
+  if (match.home_score > match.away_score) return { winner: "home", decidedOnPenalties: false };
+  if (match.away_score > match.home_score) return { winner: "away", decidedOnPenalties: false };
+  if (isKnockout(match) && match.home_pens != null && match.away_pens != null && match.home_pens !== match.away_pens) {
+    return { winner: match.home_pens > match.away_pens ? "home" : "away", decidedOnPenalties: true };
+  }
+  return { winner: null, decidedOnPenalties: false };
+}
+
+/**
+ * Score from goal events: the same rule the database trigger applies
+ * (a goal counts for its team, an own goal for the opponent).
+ */
+export function scoreFromEvents(
+  match: Pick<Match, "id" | "home_team_id" | "away_team_id">,
+  events: Pick<MatchEvent, "match_id" | "type" | "team_id">[],
+): { home: number; away: number } {
+  let home = 0;
+  let away = 0;
+  for (const e of events) {
+    if (e.match_id !== match.id) continue;
+    if ((e.type === "goal" && e.team_id === match.home_team_id) || (e.type === "own_goal" && e.team_id === match.away_team_id)) home++;
+    if ((e.type === "goal" && e.team_id === match.away_team_id) || (e.type === "own_goal" && e.team_id === match.home_team_id)) away++;
+  }
+  return { home, away };
+}
+
+export type ExtraTimeStepTo = "start" | "break" | "second" | "over";
+export type StatusStep =
+  | { to: MatchStatus; et?: undefined; label: string; confirm: boolean }
+  | { et: ExtraTimeStepTo; to?: undefined; label: string; confirm: true }
+  | null;
+
+/** The next status the admin can move a match to, mirroring admin_set_status in the database. */
+export function nextStatusStep(match: Match): StatusStep {
+  const level = match.home_score === match.away_score;
+  switch (match.status) {
+    case "scheduled":
+      return { to: "first_half", label: "Start match", confirm: false };
+    case "first_half":
+      return { to: "half_time", label: "Half time", confirm: false };
+    case "half_time":
+      return { to: "second_half", label: "Start second half", confirm: false };
+    case "second_half": {
+      const et = match.extraTime;
+      if (et) {
+        if (et.phase === "pre") return { et: "start", label: "Start extra time", confirm: true };
+        if (et.phase === "first") return et.periods === 2 ? { et: "break", label: "Extra-time break", confirm: true } : { et: "over", label: "End extra time", confirm: true };
+        if (et.phase === "break") return { et: "second", label: "Start second half of extra time", confirm: true };
+        if (et.phase === "second") return { et: "over", label: "End extra time", confirm: true };
+        return { to: "penalties", label: "Start penalties", confirm: true };
+      }
+      return isKnockout(match) && level
+        ? { to: "penalties", label: canStartExtraTime(match) ? "Full time: straight to penalties" : "Full time: go to penalties", confirm: true }
+        : { to: "finished", label: "Full time", confirm: true };
+    }
+    case "penalties":
+      return { to: "finished", label: "End shootout", confirm: true };
+    case "finished":
+      return null;
+  }
+}
+
+export function teamIdOn(match: Match, side: Side): number | null {
+  return side === "home" ? match.home_team_id : match.away_team_id;
+}
+
+export function otherSide(side: Side): Side {
+  return side === "home" ? "away" : "home";
+}
+
+// ---------------------------------------------------------------------------
+// Standings
+// ---------------------------------------------------------------------------
+
+export type StandingRow = {
+  team: Team;
+  position: number;
+  played: number;
+  won: number;
+  drawn: number;
+  lost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+  /** In a qualifying place (top 2) once the group has results. */
+  qualifying: boolean;
+  /** Group is complete and this team has qualified. */
+  qualified: boolean;
+  /** Order against a neighbour was decided by the admin override. */
+  orderedByOverride: boolean;
+  /** Level with a neighbour on every criterion and no override set: the order is not yet decided. */
+  tiedUnresolved: boolean;
+};
+
+export type GroupStandings = {
+  group: GroupCode;
+  rows: StandingRow[];
+  matchesPlayed: number;
+  matchesTotal: number;
+  complete: boolean;
+};
+
+export type FormResult = "W" | "D" | "L";
+
+export type FormSlot = {
+  match: Match;
+  opponent: Team | undefined;
+  /** Null until the match is finished. */
+  result: FormResult | null;
+  goalsFor: number;
+  goalsAgainst: number;
+};
+
+/** A team's group matches, oldest first (one slot each), with its result in the ones that are finished. */
+export function teamForm(team: Pick<Team, "id">, matches: Match[], teamsById: Map<number, Team>): FormSlot[] {
+  return matches
+    .filter((m) => m.stage === "group" && (m.home_team_id === team.id || m.away_team_id === team.id))
+    .sort((a, b) => a.kickoff_at.localeCompare(b.kickoff_at) || a.id - b.id)
+    .map((match) => {
+      const home = match.home_team_id === team.id;
+      const goalsFor = home ? match.home_score : match.away_score;
+      const goalsAgainst = home ? match.away_score : match.home_score;
+      const opponentId = home ? match.away_team_id : match.home_team_id;
+      const result: FormResult | null = !isFinished(match) ? null : goalsFor > goalsAgainst ? "W" : goalsFor < goalsAgainst ? "L" : "D";
+      return { match, opponent: opponentId != null ? teamsById.get(opponentId) : undefined, result, goalsFor, goalsAgainst };
+    });
+}
+
+const tiedOnRecord = (a: StandingRow, b: StandingRow) =>
+  a.points === b.points && a.goalDifference === b.goalDifference && a.goalsFor === b.goalsFor;
+
+/**
+ * Group tables from finished group matches.
+ * Order: points, goal difference, goals scored, then the admin's tiebreak_rank.
+ * There is no head-to-head rule.
+ */
+export function computeStandings(teams: Team[], matches: Match[]): Record<GroupCode, GroupStandings> {
+  const rows = new Map<number, StandingRow>(
+    teams.map((team) => [
+      team.id,
+      {
+        team, position: 0, played: 0, won: 0, drawn: 0, lost: 0,
+        goalsFor: 0, goalsAgainst: 0, goalDifference: 0, points: 0,
+        qualifying: false, qualified: false, orderedByOverride: false, tiedUnresolved: false,
+      },
+    ]),
+  );
+
+  const groupMatches = matches.filter((m) => m.stage === "group");
+  for (const match of groupMatches) {
+    if (!isFinished(match) || match.home_team_id == null || match.away_team_id == null) continue;
+    const home = rows.get(match.home_team_id);
+    const away = rows.get(match.away_team_id);
+    if (!home || !away) continue;
+    record(home, match.home_score, match.away_score);
+    record(away, match.away_score, match.home_score);
+  }
+
+  const result = {} as Record<GroupCode, GroupStandings>;
+  for (const group of GROUP_CODES) {
+    const fixtures = groupMatches.filter((m) => m.group_code === group);
+    const matchesPlayed = fixtures.filter(isFinished).length;
+    const complete = fixtures.length > 0 && matchesPlayed === fixtures.length;
+
+    const table = [...rows.values()]
+      .filter((r) => r.team.group_code === group)
+      .sort(
+        (a, b) =>
+          b.points - a.points ||
+          b.goalDifference - a.goalDifference ||
+          b.goalsFor - a.goalsFor ||
+          (a.team.tiebreak_rank ?? Infinity) - (b.team.tiebreak_rank ?? Infinity) ||
+          a.team.short_code.localeCompare(b.team.short_code),
+      );
+
+    table.forEach((row, i) => {
+      row.position = i + 1;
+      row.qualifying = matchesPlayed > 0 && row.position <= QUALIFIERS_PER_GROUP;
+      const neighbours = [table[i - 1], table[i + 1]].filter(Boolean);
+      const overridden = (n: StandingRow) =>
+        row.team.tiebreak_rank != null && n.team.tiebreak_rank != null && row.team.tiebreak_rank !== n.team.tiebreak_rank;
+      row.orderedByOverride = neighbours.some((n) => tiedOnRecord(row, n) && overridden(n));
+      row.tiedUnresolved = row.played > 0 && neighbours.some((n) => tiedOnRecord(row, n) && !overridden(n));
+    });
+
+    // Qualified only once the group is complete and no undecided dead heat straddles the cut.
+    table.forEach((row) => (row.qualified = complete && row.qualifying));
+    for (const cluster of levelClusters(table)) {
+      const straddles =
+        cluster.some((r) => r.tiedUnresolved) &&
+        cluster.some((r) => r.position <= QUALIFIERS_PER_GROUP) &&
+        cluster.some((r) => r.position > QUALIFIERS_PER_GROUP);
+      if (straddles) cluster.forEach((r) => (r.qualified = false));
+    }
+
+    result[group] = { group, rows: table, matchesPlayed, matchesTotal: fixtures.length, complete };
+  }
+  return result;
+}
+
+/** Runs of 2+ teams level on points, goal difference and goals scored, in table order. */
+export function levelClusters(rows: StandingRow[]): StandingRow[][] {
+  const clusters: StandingRow[][] = [];
+  for (const row of rows) {
+    const last = clusters[clusters.length - 1];
+    if (last && tiedOnRecord(last[0], row)) last.push(row);
+    else clusters.push([row]);
+  }
+  return clusters.filter((c) => c.length > 1);
+}
+
+/**
+ * Dead heats the admin must settle with "Set qualifiers": the group is complete and
+ * teams level on every rule (with no order set) include 1st or 2nd place.
+ */
+export function decisionsNeeded(g: GroupStandings): StandingRow[][] {
+  if (!g.complete) return [];
+  return levelClusters(g.rows).filter(
+    (c) => c.some((r) => r.tiedUnresolved) && c.some((r) => r.position <= QUALIFIERS_PER_GROUP),
+  );
+}
+
+function record(row: StandingRow, scored: number, conceded: number) {
+  row.played++;
+  row.goalsFor += scored;
+  row.goalsAgainst += conceded;
+  row.goalDifference = row.goalsFor - row.goalsAgainst;
+  if (scored > conceded) {
+    row.won++;
+    row.points += POINTS_FOR_WIN;
+  } else if (scored === conceded) {
+    row.drawn++;
+    row.points += POINTS_FOR_DRAW;
+  } else {
+    row.lost++;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Knockouts
+// ---------------------------------------------------------------------------
+
+export type KnockoutRound = {
+  key: "r16" | "qf" | "sf" | "finals";
+  label: string;
+  shortLabel: string;
+  /** Slot labels in bracket order (pairs feed the next round). */
+  slots: string[];
+};
+
+export const KNOCKOUT_ROUNDS: KnockoutRound[] = [
+  { key: "r16", label: "Round of 16", shortLabel: "R16",
+    slots: ["R16-M1", "R16-M2", "R16-M3", "R16-M4", "R16-M5", "R16-M6", "R16-M7", "R16-M8"] },
+  { key: "qf", label: "Quarter-finals", shortLabel: "QF", slots: ["QF1", "QF2", "QF3", "QF4"] },
+  { key: "sf", label: "Semi-finals", shortLabel: "SF", slots: ["SF1", "SF2"] },
+  // 3rd place first: it is played the day before the final.
+  { key: "finals", label: "Finals", shortLabel: "Final", slots: ["3RD", "FINAL"] },
+];
+
+/**
+ * A bracket label as shown to people, matching the official bracket: "R16-M1" → "M1",
+ * "FINAL" → "Final", "3RD" → "3rd place". Stored labels never change.
+ */
+export function slotDisplayName(slotLabel: string): string {
+  if (slotLabel === "FINAL") return "Final";
+  if (slotLabel === "3RD") return "3rd place";
+  return slotLabel.replace(/^R16-/, "");
+}
+
+const STAGE_NAMES: Record<Exclude<MatchStage, "group">, string> = {
+  round_of_16: "Round of 16",
+  quarter_final: "Quarter-final",
+  semi_final: "Semi-final",
+  third_place: "3rd place match",
+  final: "Final",
+};
+const STAGE_SHORT: Record<Exclude<MatchStage, "group">, string> = {
+  round_of_16: "R16",
+  quarter_final: "QF",
+  semi_final: "SF",
+  third_place: "3rd place",
+  final: "Final",
+};
+
+/** "Round of 16", "Quarter-final", "Semi-final", "3rd place match", "Final"; null for a group match. */
+export function stageName(match: Pick<Match, "stage">): string | null {
+  return match.stage === "group" ? null : STAGE_NAMES[match.stage];
+}
+
+/** The short tag for match rows: "R16", "QF", "SF", "3rd place", "Final"; null for a group match. */
+export function stageShort(match: Pick<Match, "stage">): string | null {
+  return match.stage === "group" ? null : STAGE_SHORT[match.stage];
+}
+
+/** The tie within its round ("M1", "QF2", "SF1"); null for group matches, the 3rd place match and the Final. */
+export function tieLabel(match: Pick<Match, "stage" | "slot_label">): string | null {
+  if (match.stage === "group" || match.stage === "third_place" || match.stage === "final" || !match.slot_label) return null;
+  return slotDisplayName(match.slot_label);
+}
+
+/** Bracket labels inside a message from the database ("Reset R16-M1 first") in display form. */
+export function displaySlotLabels(text: string): string {
+  return text.replace(/\bR16-(M\d)\b/g, "$1");
+}
+
+/** The tie a match's winner goes on to (by the stored sources, not match numbers). */
+export function winnerGoesTo(match: Pick<Match, "id">, matches: Match[]): Match | undefined {
+  return matches.find(
+    (m) =>
+      (m.home_source === "match_winner" && m.home_source_match === match.id) ||
+      (m.away_source === "match_winner" && m.away_source_match === match.id),
+  );
+}
+
+export type ResolvedSide = {
+  /** The team in this slot, once the admin has assigned it. */
+  team: Team | null;
+  /** What the slot is waiting for, e.g. "Winner Group A". */
+  placeholder: string;
+  /** Who would fill the slot on current results (null if unknown). */
+  projected: Team | null;
+  /** True when the projection can no longer change. */
+  projectionFinal: boolean;
+};
+
+/** Team (or placeholder) on one side of a knockout match. */
+export function resolveSide(
+  match: Match,
+  side: Side,
+  ctx: { teamsById: Map<number, Team>; matchesById: Map<number, Match>; standings: Record<GroupCode, GroupStandings> },
+): ResolvedSide {
+  const teamId = teamIdOn(match, side);
+  const team = teamId != null ? ctx.teamsById.get(teamId) ?? null : null;
+  const source = side === "home" ? match.home_source : match.away_source;
+  const sourceGroup = (side === "home" ? match.home_source_group : match.away_source_group) as GroupCode | null;
+  const sourceMatchId = side === "home" ? match.home_source_match : match.away_source_match;
+
+  if (!source) return { team, placeholder: "", projected: null, projectionFinal: false };
+
+  if ((source === "group_winner" || source === "group_runner_up") && sourceGroup) {
+    const position = source === "group_winner" ? 1 : 2;
+    const group = ctx.standings[sourceGroup];
+    const row = group?.rows[position - 1];
+    return {
+      team,
+      placeholder: `${position === 1 ? "Winner" : "Runner-up"} Group ${sourceGroup}`,
+      // No projection while the place is a dead heat: that would be a coin-flip.
+      projected: row && group.matchesPlayed > 0 && !row.tiedUnresolved ? row.team : null,
+      projectionFinal: !!group?.complete,
+    };
+  }
+
+  const sourceMatch = sourceMatchId != null ? ctx.matchesById.get(sourceMatchId) : undefined;
+  const wantWinner = source === "match_winner";
+  // The 3rd place match takes the semi-final losers, shown as "Runner-up SF1" (stored as a loser source).
+  const placeholder = `${wantWinner ? "Winner" : "Runner-up"} ${sourceMatch?.slot_label ? slotDisplayName(sourceMatch.slot_label) : `match ${sourceMatchId}`}`;
+  let projected: Team | null = null;
+  if (sourceMatch) {
+    const outcome = matchOutcome(sourceMatch);
+    if (outcome?.winner) {
+      const pickSide = wantWinner ? outcome.winner : otherSide(outcome.winner);
+      const id = teamIdOn(sourceMatch, pickSide);
+      projected = id != null ? ctx.teamsById.get(id) ?? null : null;
+    }
+  }
+  return { team, placeholder, projected, projectionFinal: projected != null };
+}
+
+export type FillPlan = {
+  match: Match;
+  side: Side;
+  placeholder: string;
+  team: Team | null;
+  current: Team | null;
+  outcome: "filled" | "unchanged" | "skipped";
+  reason: string | null;
+};
+
+/**
+ * What "Fill Round of 16" will do, slot by slot. Mirrors admin_fill_round_of_16 in the database:
+ * only complete groups, never a dead heat, never a tie that has started.
+ */
+export function previewFillRound16(
+  matches: Match[],
+  events: Pick<MatchEvent, "match_id">[],
+  standings: Record<GroupCode, GroupStandings>,
+  teamsById: Map<number, Team>,
+): FillPlan[] {
+  const plans: FillPlan[] = [];
+  const r16 = matches.filter((m) => m.stage === "round_of_16").sort((a, b) => (a.slot_label ?? "").localeCompare(b.slot_label ?? ""));
+  for (const match of r16) {
+    const started = match.status !== "scheduled" || events.some((e) => e.match_id === match.id);
+    for (const side of ["home", "away"] as const) {
+      const group = (side === "home" ? match.home_source_group : match.away_source_group) as GroupCode;
+      const position = (side === "home" ? match.home_source : match.away_source) === "group_winner" ? 1 : 2;
+      const currentId = teamIdOn(match, side);
+      const current = currentId != null ? teamsById.get(currentId) ?? null : null;
+      const g = standings[group];
+      const row = g.rows[position - 1];
+      const placeholder = `${position === 1 ? "Winner" : "Runner-up"} Group ${group}`;
+      let plan: Omit<FillPlan, "match" | "side" | "placeholder" | "current">;
+      if (!g.complete) plan = { team: null, outcome: "skipped", reason: `Group ${group} not complete` };
+      else if (!row || row.tiedUnresolved) plan = { team: null, outcome: "skipped", reason: `Group ${group} needs a decision` };
+      else if (row.team.id === currentId) plan = { team: row.team, outcome: "unchanged", reason: null };
+      else if (started) plan = { team: row.team, outcome: "skipped", reason: `${slotDisplayName(match.slot_label ?? "")} has already started` };
+      else plan = { team: row.team, outcome: "filled", reason: null };
+      plans.push({ match, side, placeholder, current, ...plan });
+    }
+  }
+  return plans;
+}
+
+/** The first knockout round that still has unfinished matches (or the last round). */
+export function currentRound(matches: Match[]): KnockoutRound["key"] {
+  const bySlot = new Map(matches.filter((m) => m.slot_label).map((m) => [m.slot_label!, m]));
+  for (const round of KNOCKOUT_ROUNDS) {
+    if (round.slots.some((s) => !isFinished(bySlot.get(s) ?? { status: "scheduled" }))) return round.key;
+  }
+  return "finals";
+}
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+export type DisplayEvent = MatchEvent & {
+  /** Side of the scoreboard the event is shown under. Own goals appear under the team that benefits. */
+  side: Side;
+  playerName: string | null;
+  /** Shirt number, when recorded. */
+  playerNumber: number | null;
+  /** The player's own team's short name, shown with own goals: "Dorji (BSMPL) 37' (OG)". */
+  playerTeamCode: string | null;
+};
+
+/** Goals and cards for a match, ordered by minute, placed on the correct side. */
+export function eventsForMatch(
+  match: Match,
+  events: MatchEvent[],
+  playersById: Map<string, Player>,
+  teamsById?: Map<number, Pick<Team, "short_code" | "name">>,
+): DisplayEvent[] {
+  return events
+    .filter((e) => e.match_id === match.id)
+    .map((e) => {
+      const ownSide: Side = e.team_id === match.home_team_id ? "home" : "away";
+      return {
+        ...e,
+        side: e.type === "own_goal" ? otherSide(ownSide) : ownSide,
+        playerName: e.player_id ? playersById.get(e.player_id)?.name ?? null : null,
+        playerNumber: e.player_id ? playersById.get(e.player_id)?.shirt_number ?? null : null,
+        playerTeamCode: teamsById?.get(e.team_id) ? teamShort(teamsById.get(e.team_id)!) : null,
+      };
+    })
+    .sort(compareEventTime);
+}
+
+/** Chronological order; goals with an unknown minute (entered via Set final score) go last. */
+export function compareEventTime(
+  a: Pick<MatchEvent, "minute" | "added_time" | "id">,
+  b: Pick<MatchEvent, "minute" | "added_time" | "id">,
+): number {
+  if (a.minute == null || b.minute == null) return (a.minute == null ? 1 : 0) - (b.minute == null ? 1 : 0) || a.id - b.id;
+  return a.minute - b.minute || (a.added_time ?? 0) - (b.added_time ?? 0) || a.id - b.id;
+}
+
+// ---------------------------------------------------------------------------
+// Scorers and timeline
+// ---------------------------------------------------------------------------
+
+export type ScorerLine = {
+  key: string;
+  side: Side;
+  /** Player name, "Goal" when no scorer was recorded. */
+  name: string;
+  /** Shirt number, when recorded. */
+  number: number | null;
+  ownGoal: boolean;
+  /** For own goals: the scorer's own team's short name, the side the line is not listed under. */
+  teamCode: string | null;
+  /** Minutes in order ("10'", "45+2'"); goals without a minute are counted in `untimed`. */
+  minutes: string[];
+  untimed: number;
+};
+
+/**
+ * Goals grouped by scorer, as broadcasters show them: one line per player with all their minutes,
+ * players ordered by their first goal. Own goals sit under the team that benefited, marked OG.
+ * Goals with no scorer recorded share a "Goal" line, so the count still adds up.
+ */
+export function scorerLines(events: DisplayEvent[]): ScorerLine[] {
+  const lines = new Map<string, ScorerLine>();
+  for (const e of events) {
+    if (e.type !== "goal" && e.type !== "own_goal") continue;
+    const ownGoal = e.type === "own_goal";
+    const key = `${e.side}:${ownGoal ? "og" : "g"}:${e.player_id ?? "none"}`;
+    const line = lines.get(key) ?? {
+      key,
+      side: e.side,
+      name: e.playerName ?? (ownGoal ? "Own goal" : "Goal"),
+      number: e.playerName ? e.playerNumber : null,
+      ownGoal: ownGoal && e.playerName != null,
+      teamCode: ownGoal ? e.playerTeamCode : null,
+      minutes: [],
+      untimed: 0,
+    };
+    if (e.minute == null) line.untimed++;
+    else line.minutes.push(eventMinuteLabel(e));
+    lines.set(key, line);
+  }
+  return [...lines.values()]; // events arrive in time order, so lines are in order of first goal
+}
+
+export type PlayerRef = { name: string; number: number | null };
+
+export type DisplaySub = Substitution & { side: Side; off: PlayerRef | null; on: PlayerRef | null };
+
+/** Shirt numbers go from 00 to 99. Number 0 is shown as "00" (a jersey worn in this tournament). */
+export const MIN_SHIRT = 0;
+export const MAX_SHIRT = 99;
+export function shirtLabel(n: number): string {
+  return n === 0 ? "00" : String(n);
+}
+
+/** Shirt order: by shirt number (00 first), players without one last, then by name. */
+export function byShirtOrder(a: Player, b: Player): number {
+  return (a.shirt_number ?? 999) - (b.shirt_number ?? 999) || a.name.localeCompare(b.name);
+}
+
+// ---------------------------------------------------------------------------
+// Substitution checks (warnings in the admin sheets)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a player who was substituted off may come back on (rolling substitutions). Until the
+ * organisers confirm, re-entry is only warned about: the admin sees the warning and can "Save
+ * anyway". Set to false to make re-entry (and goals or cards after going off) a hard block.
+ */
+export const ALLOW_RE_ENTRY = true;
+
+type Moment = { minute: number | null; added_time: number | null };
+
+/**
+ * a happened before b (or at the same time, unless strict). An unknown minute on either side counts
+ * as earlier: it can't be ruled out, so the admin is warned rather than not.
+ */
+function happenedBefore(a: Moment, b: Moment, strict: boolean): boolean {
+  if (a.minute == null || b.minute == null) return true;
+  const d = a.minute - b.minute || (a.added_time ?? 0) - (b.added_time ?? 0);
+  return strict ? d < 0 : d <= 0;
+}
+
+const momentLabel = (m: Moment) => (m.minute == null ? "an unknown minute" : eventMinuteLabel({ minute: m.minute, added_time: m.added_time }));
+
+/**
+ * Where a player stands in a match at a moment, from that match's other substitutions:
+ * "off" (substituted off, not back on), "on" (came on, not gone off), or null (no substitution yet).
+ * `at` null: after every substitution. `except`: the substitution being edited. `strict`: only
+ * substitutions before `at`, not at the same minute (goals and cards: a player can score, then go off).
+ */
+export function playerSubState(
+  playerId: string,
+  matchId: number,
+  subs: Substitution[],
+  at: Moment | null,
+  except?: number,
+  strict = false,
+): { state: "on" | "off"; at: string } | null {
+  const mine = subs
+    .filter((s) => s.match_id === matchId && s.id !== except && (s.player_on === playerId || s.player_off === playerId))
+    .filter((s) => !at || happenedBefore(s, at, strict))
+    .sort(compareEventTime);
+  let result: { state: "on" | "off"; at: string } | null = null;
+  for (const s of mine) {
+    if (s.player_off === playerId) result = { state: "off", at: momentLabel(s) };
+    else result = { state: "on", at: momentLabel(s) };
+  }
+  return result;
+}
+
+export type SubWarning = { text: string; /** blocked when ALLOW_RE_ENTRY is false */ reEntry: boolean };
+
+/** Warnings for a substitution about to be saved: re-entry, already on, already off. */
+export function substitutionWarnings(args: {
+  matchId: number;
+  subs: Substitution[];
+  at: Moment | null;
+  except?: number;
+  offId: string | null;
+  onId: string | null;
+  label: (playerId: string) => string;
+}): SubWarning[] {
+  const { matchId, subs, at, except, offId, onId, label } = args;
+  const out: SubWarning[] = [];
+  if (onId) {
+    const st = playerSubState(onId, matchId, subs, at, except);
+    if (st?.state === "off") out.push({ text: `${label(onId)} was substituted off at ${st.at}. Bring them back on anyway?`, reEntry: true });
+    if (st?.state === "on") out.push({ text: `${label(onId)} is already on the pitch (came on at ${st.at}).`, reEntry: false });
+  }
+  if (offId) {
+    const st = playerSubState(offId, matchId, subs, at, except);
+    if (st?.state === "off") out.push({ text: `${label(offId)} already went off at ${st.at}.`, reEntry: false });
+  }
+  return out;
+}
+
+/** Warning for a goal or card by a player who had gone off before its minute. */
+export function eventAfterSubWarning(args: {
+  matchId: number;
+  subs: Substitution[];
+  at: Moment | null;
+  playerId: string | null;
+  noun: string;
+  label: (playerId: string) => string;
+}): SubWarning | null {
+  const { matchId, subs, at, playerId, noun, label } = args;
+  if (!playerId) return null;
+  const st = playerSubState(playerId, matchId, subs, at, undefined, true);
+  if (st?.state !== "off") return null;
+  const when = at && at.minute != null ? ` at ${momentLabel(at)}` : "";
+  return { text: `${label(playerId)} went off at ${st.at}. Record this ${noun}${when} anyway?`, reEntry: true };
+}
+
+/** Chip notes for a team's players at a moment ("off 62'", "on 55'"), and who is currently off. */
+export function subMarks(players: Player[], matchId: number, subs: Substitution[], at: Moment | null, except?: number, strict = false) {
+  const marks: Record<string, string> = {};
+  const off = new Set<string>();
+  for (const p of players) {
+    const st = playerSubState(p.id, matchId, subs, at, except, strict);
+    if (!st) continue;
+    marks[p.id] = `${st.state} ${st.at === "an unknown minute" ? "" : st.at}`.trim();
+    if (st.state === "off") off.add(p.id);
+  }
+  return { marks, off };
+}
+
+/** Substitutions for a match, in time order, with names and numbers. Untimed ones go last. */
+export function subsForMatch(match: Match, subs: Substitution[], playersById: Map<string, Player>): DisplaySub[] {
+  const ref = (id: string | null): PlayerRef | null => {
+    const p = id ? playersById.get(id) : undefined;
+    return p ? { name: p.name, number: p.shirt_number } : null;
+  };
+  return subs
+    .filter((s) => s.match_id === match.id)
+    .map((s) => ({ ...s, side: (s.team_id === match.home_team_id ? "home" : "away") as Side, off: ref(s.player_off), on: ref(s.player_on) }))
+    .sort(compareEventTime);
+}
+
+export type TimelineRow =
+  | { kind: "event"; event: DisplayEvent; score: [number, number] | null; hatTrick: boolean; count?: number }
+  | { kind: "sub"; sub: DisplaySub }
+  | { kind: "divider"; label: string; detail?: string }
+  | { kind: "untimed" };
+
+const PLAYED_FIRST_HALF: readonly MatchStatus[] = ["half_time", "second_half", "penalties", "finished"];
+
+/**
+ * Every goal and card in minute order, with the running score on goals, half time and full time
+ * as dividers (and the shoot-out for knockouts), then anything without a minute at the end.
+ */
+export function matchTimeline(match: Match, events: DisplayEvent[], subs: DisplaySub[] = []): TimelineRow[] {
+  const timed = events.filter((e) => e.minute != null);
+  const untimed = events.filter((e) => e.minute == null);
+  // Substitutions slot in by minute (after a goal or card in the same minute); untimed ones go last.
+  const timedSubs = subs.filter((x) => x.minute != null);
+  const subsBefore = (e: Pick<MatchEvent, "minute" | "added_time"> | null) =>
+    timedSubs.filter((x) => !e || x.minute! < e.minute! || (x.minute === e.minute && (x.added_time ?? 0) < (e.added_time ?? 0)));
+  const goalsSoFar = new Map<string, number>();
+  const isGoal = (e: DisplayEvent) => e.type === "goal" || e.type === "own_goal";
+  const hatTrickOn = (e: DisplayEvent) => {
+    if (e.type !== "goal" || !e.player_id) return false;
+    const n = (goalsSoFar.get(e.player_id) ?? 0) + 1;
+    goalsSoFar.set(e.player_id, n);
+    return n === 3;
+  };
+  const score: [number, number] = [0, 0];
+  const rows: TimelineRow[] = [];
+  let halfTimeShown = false;
+  let extraTimeShown = false;
+  // Extra time: a divider with the score after 90', before the first extra-time entry.
+  const extraTime = () => {
+    if (extraTimeShown || !match.extraTime) return;
+    extraTimeShown = true;
+    rows.push({ kind: "divider", label: "Extra time", detail: halfTimeKnown ? `${score[0]}–${score[1]}` : undefined });
+  };
+  const FULL = HALF_LENGTH_MINUTES * 2;
+  // The half-time score is only known if every goal has a minute.
+  const halfTimeKnown = !untimed.some(isGoal);
+  const halfTime = () => {
+    if (halfTimeShown || !halfTimeKnown || !PLAYED_FIRST_HALF.includes(match.status)) return;
+    halfTimeShown = true;
+    rows.push({ kind: "divider", label: "Half time", detail: `${score[0]}–${score[1]}` });
+  };
+  const placed = new Set<number>();
+  const placeSubs = (list: DisplaySub[]) => {
+    for (const x of list) {
+      if (placed.has(x.id)) continue;
+      if (x.minute! > HALF_LENGTH_MINUTES) halfTime();
+      if (x.minute! > FULL) extraTime();
+      placed.add(x.id);
+      rows.push({ kind: "sub", sub: x });
+    }
+  };
+  for (const e of timed) {
+    placeSubs(subsBefore(e));
+    if (e.minute! > HALF_LENGTH_MINUTES) halfTime();
+    if (e.minute! > FULL) extraTime();
+    if (isGoal(e)) score[e.side === "home" ? 0 : 1]++;
+    rows.push({ kind: "event", event: e, score: isGoal(e) ? [score[0], score[1]] : null, hatTrick: hatTrickOn(e) });
+  }
+  placeSubs(timedSubs);
+  halfTime();
+  if (match.status === "penalties" || match.status === "finished") {
+    extraTime();
+    rows.push({ kind: "divider", label: wentToExtraTime(match) ? "After extra time" : "Full time", detail: `${match.home_score}–${match.away_score}` });
+    if (match.home_pens != null && match.away_pens != null) {
+      rows.push({ kind: "divider", label: "Penalties", detail: `${match.home_pens}–${match.away_pens}` });
+    }
+  }
+  const untimedSubs = subs.filter((x) => x.minute == null);
+  if (untimed.length || untimedSubs.length) {
+    rows.push({ kind: "untimed" });
+    for (const x of untimedSubs) rows.push({ kind: "sub", sub: x });
+    // Goals with neither scorer nor minute (e.g. a final score entered afterwards) share one row per
+    // team and type: "Goal ×17" rather than seventeen identical lines.
+    const grouped = new Map<string, Extract<TimelineRow, { kind: "event" }>>();
+    for (const e of untimed) {
+      if (isGoal(e) && !e.player_id) {
+        const key = `${e.side}:${e.type}`;
+        const row = grouped.get(key);
+        if (row) row.count = (row.count ?? 1) + 1;
+        else {
+          const fresh: Extract<TimelineRow, { kind: "event" }> = { kind: "event", event: e, score: null, hatTrick: false, count: 1 };
+          grouped.set(key, fresh);
+          rows.push(fresh);
+        }
+      } else rows.push({ kind: "event", event: e, score: null, hatTrick: hatTrickOn(e) });
+    }
+  }
+  return rows;
+}
+
+/** "67'", "45+2'", or "–" when the minute isn't known. */
+export function eventMinuteLabel(e: Pick<MatchEvent, "minute" | "added_time">): string {
+  if (e.minute == null) return "–";
+  return e.added_time ? `${e.minute}+${e.added_time}'` : `${e.minute}'`;
+}
+
+// ---------------------------------------------------------------------------
+// Discipline: cards and suspensions (rules confirmed by the organisers)
+// ---------------------------------------------------------------------------
+
+/**
+ * The organisers' discipline rules, all in one place.
+ * - Two yellows in one match: sent off, banned for the team's next SECOND_YELLOW_BAN_MATCHES match(es).
+ * - A straight red: banned for the team's next RED_BAN_MATCHES match(es). Longer bans for serious red
+ *   cards are the organisers' decision (not built).
+ * - YELLOW_RULE "consecutive": a yellow in two of the team's consecutive matches (CONSECUTIVE_BY "team":
+ *   the team's matches, so a match in between without a yellow, or that the player missed, breaks the
+ *   run) bans the player for the team's next YELLOW_BAN_MATCHES match(es); after the ban the run starts
+ *   again from zero. Yellows in a match where the player was sent off don't count.
+ * - YELLOW_RESET_AFTER null: yellow cards never reset during the tournament.
+ * - A ban is served when the team's next match is finished; postponed or abandoned matches don't count.
+ */
+export const DISCIPLINE = {
+  SECOND_YELLOW_BAN_MATCHES: 1,
+  RED_BAN_MATCHES: 1,
+  YELLOW_RULE: "consecutive",
+  CONSECUTIVE_BY: "team",
+  YELLOW_BAN_MATCHES: 1,
+  YELLOW_RESET_AFTER: null,
+} as const;
+export const RED_BAN_MATCHES = DISCIPLINE.RED_BAN_MATCHES;
+
+export type BanKind = "red" | "second_yellow" | "yellows";
+export type Ban = {
+  playerId: string;
+  teamId: number;
+  kind: BanKind;
+  /** The match the ban came from. */
+  fromMatchId: number;
+  matches: number;
+};
+/** A player's cards in one match. */
+export type PlayerMatchCards = { matchId: number; teamId: number; yellows: number; red: boolean; sentOff: boolean };
+export type Discipline = {
+  /** Cards per player, match by match (kick-off order). */
+  cards: Map<string, PlayerMatchCards[]>;
+  /** Bans not yet (fully) served, with how many matches are left. */
+  pending: (Ban & { left: number })[];
+  /** Who was or is suspended for a match: match id -> player id -> the ban. */
+  suspendedIn: Map<number, Map<string, Ban>>;
+  /** Players with a counting yellow in their team's last finished match and no ban: one more yellow means a ban. */
+  oneYellowAway: Map<string, { teamId: number; matchId: number }>;
+  /** Cards recorded without a player: they can't count. */
+  unattributed: MatchEvent[];
+};
+
+/** Card events that are a player's second yellow in their match (shown as yellow-and-red). */
+export function secondYellowIds(events: Pick<MatchEvent, "id" | "match_id" | "type" | "player_id" | "minute" | "added_time">[]): Set<number> {
+  const seen = new Map<string, number>();
+  const ids = new Set<number>();
+  for (const e of events.filter((x) => x.type === "yellow_card" && x.player_id).sort(compareEventTime)) {
+    const key = `${e.match_id}:${e.player_id}`;
+    const n = (seen.get(key) ?? 0) + 1;
+    seen.set(key, n);
+    if (n === 2) ids.add(e.id);
+  }
+  return ids;
+}
+
+/**
+ * Applies the discipline rules to every team's finished matches in kick-off order: each finished
+ * match first serves the bans pending for that team's players, then its cards may start new bans or
+ * yellow runs. Pending bans then apply to the team's next matches not yet finished.
+ */
+export function computeDiscipline(matches: Match[], events: MatchEvent[]): Discipline {
+  const cards = new Map<string, PlayerMatchCards[]>();
+  const pendingByPlayer = new Map<string, Ban & { left: number }>();
+  const suspendedIn = new Map<number, Map<string, Ban>>();
+  const oneYellowAway = new Map<string, { teamId: number; matchId: number }>();
+  const lastYellow = new Map<string, number>(); // player -> index (in their team's finished matches) of a counting yellow
+  const cardEvents = events.filter((e) => e.type === "yellow_card" || e.type === "red_card");
+  const unattributed = cardEvents.filter((e) => !e.player_id);
+  const byMatch = new Map<number, MatchEvent[]>();
+  for (const e of cardEvents) if (e.player_id) byMatch.set(e.match_id, [...(byMatch.get(e.match_id) ?? []), e]);
+  const ordered = [...matches].sort((a, b) => a.kickoff_at.localeCompare(b.kickoff_at) || a.id - b.id);
+  const teamIds = new Set(ordered.flatMap((m) => [m.home_team_id, m.away_team_id]).filter((x): x is number => x != null));
+  const mark = (matchId: number, ban: Ban) => {
+    const map = suspendedIn.get(matchId) ?? new Map<string, Ban>();
+    map.set(ban.playerId, ban);
+    suspendedIn.set(matchId, map);
+  };
+
+  for (const teamId of teamIds) {
+    const teamMatches = ordered.filter((m) => m.home_team_id === teamId || m.away_team_id === teamId);
+    const finished = teamMatches.filter(isFinished);
+    finished.forEach((m, i) => {
+      // 1. This match being played serves the bans pending for this team's players.
+      for (const ban of [...pendingByPlayer.values()].filter((b) => b.teamId === teamId)) {
+        mark(m.id, ban);
+        ban.left -= 1;
+        if (ban.left <= 0) pendingByPlayer.delete(ban.playerId);
+      }
+      // 2. This match's cards, per player of this team.
+      const perPlayer = new Map<string, { yellows: number; red: boolean }>();
+      for (const e of byMatch.get(m.id) ?? []) {
+        if (e.team_id !== teamId) continue;
+        const c = perPlayer.get(e.player_id!) ?? { yellows: 0, red: false };
+        if (e.type === "yellow_card") c.yellows += 1;
+        else c.red = true;
+        perPlayer.set(e.player_id!, c);
+      }
+      for (const [playerId, c] of perPlayer) {
+        const sentOff = c.red || c.yellows >= 2;
+        cards.set(playerId, [...(cards.get(playerId) ?? []), { matchId: m.id, teamId, yellows: c.yellows, red: c.red, sentOff }]);
+        if (sentOff) {
+          const kind: BanKind = c.yellows >= 2 && !c.red ? "second_yellow" : "red";
+          const n = kind === "red" ? DISCIPLINE.RED_BAN_MATCHES : DISCIPLINE.SECOND_YELLOW_BAN_MATCHES;
+          pendingByPlayer.set(playerId, { playerId, teamId, kind, fromMatchId: m.id, matches: n, left: n });
+          // Yellows in a match where the player was sent off don't count, and the run is broken.
+          lastYellow.delete(playerId);
+        } else if (c.yellows === 1) {
+          if (lastYellow.get(playerId) === i - 1) {
+            const n = DISCIPLINE.YELLOW_BAN_MATCHES;
+            pendingByPlayer.set(playerId, { playerId, teamId, kind: "yellows", fromMatchId: m.id, matches: n, left: n });
+            lastYellow.delete(playerId); // the run starts again from zero after the ban
+          } else lastYellow.set(playerId, i);
+        }
+      }
+      // A team match without a counting yellow for a player breaks their run (handled by the index check).
+    });
+    // Players one yellow away: a counting yellow in the team's last finished match, no ban pending,
+    // and the team still has a match to play (knocked-out teams are left out).
+    const lastIndex = finished.length - 1;
+    const stillPlaying = teamMatches.some((m) => !isFinished(m));
+    for (const [playerId, idx] of lastYellow) {
+      if (stillPlaying && idx === lastIndex && lastIndex >= 0 && !pendingByPlayer.has(playerId)) {
+        const playedFor = cards.get(playerId)?.find((c) => c.matchId === finished[idx].id && c.teamId === teamId);
+        if (playedFor) oneYellowAway.set(playerId, { teamId, matchId: finished[idx].id });
+      }
+    }
+    // Pending bans apply to the team's next matches not yet finished (in kick-off order, postponed ones included).
+    const upcoming = teamMatches.filter((m) => !isFinished(m));
+    for (const ban of [...pendingByPlayer.values()].filter((b) => b.teamId === teamId)) {
+      upcoming.slice(0, ban.left).forEach((m) => mark(m.id, ban));
+    }
+  }
+  return { cards, pending: [...pendingByPlayer.values()], suspendedIn, oneYellowAway, unattributed };
+}
+
+/** "Sent off vs Zimdra FC, 19 Oct", "Second yellow vs Zimdra FC, 19 Oct", "Yellow cards in two consecutive matches". */
+export function banReason(ban: Ban, matchesById: Map<number, Match>, opponentName: (teamId: number | null) => string, day: (iso: string) => string): string {
+  const m = matchesById.get(ban.fromMatchId);
+  const vs = m ? ` vs ${opponentName(m.home_team_id === ban.teamId ? m.away_team_id : m.home_team_id)}, ${day(m.kickoff_at)}` : "";
+  if (ban.kind === "yellows") return "Yellow cards in two consecutive matches";
+  return `${ban.kind === "second_yellow" ? "Sent off (second yellow)" : "Sent off"}${vs}`;
+}
