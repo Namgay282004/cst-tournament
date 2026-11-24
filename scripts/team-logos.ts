@@ -24,6 +24,7 @@ const PIPELINE_VERSION = 1;
 /** File names that differ from the official team names (lower case, without extension). */
 const ALIASES: Record<string, string> = {
   "jaigaon veteran": "JGV", // Jaigaon Veterans, Group B
+  "gcbs fc": "GCB", // BSB Veteran FC (its name in the fixtures file)
 };
 
 /**

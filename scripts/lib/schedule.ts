@@ -12,7 +12,7 @@
 import ExcelJS from "exceljs";
 import {
   EXPECTED_GROUP_MATCHES, EXPECTED_MATCHES, EXPECTED_TEAMS, GROUPS, SCHEDULE_FILE, SCHEDULE_SHEET,
-  SHORT_CODES, TEAMS_PER_GROUP, THIMPHU_OFFSET,
+  SHORT_CODES, TEAM_NAME_OVERRIDES, TEAMS_PER_GROUP, THIMPHU_OFFSET,
 } from "./config";
 import type { Database } from "../../src/lib/supabase/database.types";
 
@@ -114,8 +114,8 @@ export function parseWorksheet(sheet: ExcelJS.Worksheet): { teams: ParsedTeam[];
         if (code[0] !== group_code) throw new Error(`Match ${id}: slot ${code} is not in Group ${group_code}.`);
         if (!name) throw new Error(`Match ${id}: no team name for slot ${code}.`);
         const known = teams.get(code);
-        if (!known) teams.set(code, { slot: code, group_code: code[0], short_code: SHORT_CODES[code], name });
-        else if (known.name !== name) {
+        if (!known) teams.set(code, { slot: code, group_code: code[0], short_code: SHORT_CODES[code], name: TEAM_NAME_OVERRIDES[code] ?? name });
+        else if (known.name !== (TEAM_NAME_OVERRIDES[code] ?? name)) {
           console.warn(`Note: slot ${code} is "${known.name}" in one row and "${name}" in match ${id}; using "${known.name}".`);
         }
       }

@@ -13,6 +13,13 @@ export const SHORT_CODES: Record<string, string> = {
   B1: "DRV", B2: "JGV", B3: "GMV", B4: "SMV", B5: "RPU",
 };
 
+// Official names that differ from the fixtures file (the organisers renamed the team after the file
+// was made). Applied when the file is read, so `npm run seed` writes these names and never brings the
+// old one back.
+export const TEAM_NAME_OVERRIDES: Record<string, string> = {
+  A1: "BSB Veteran FC", // "GCBS FC" in the fixtures file; renamed 24 Nov 2026
+};
+
 // The shape of the tournament, checked by the parser before anything is written.
 export const GROUPS = ["A", "B"] as const;
 export const TEAMS_PER_GROUP = 5;

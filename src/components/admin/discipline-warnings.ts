@@ -5,7 +5,7 @@ import { formatDay } from "@/lib/format";
 import { banReason, isFinished, secondYellowIds, type Ban, type EventType, type Match, type SubWarning } from "@/lib/tournament";
 import { useTournament } from "../tournament-provider";
 
-/** Why a player is banned, in words: "Sent off vs GCBS FC, Tue 1 Dec". */
+/** Why a player is banned, in words: "Sent off vs BSB Veteran FC, Tue 1 Dec". */
 export function useBanReason() {
   const { matchesById, teamsById } = useTournament();
   return (ban: Ban) => banReason(ban, matchesById, (id) => teamShort(id != null ? teamsById.get(id) : undefined, "TBD"), formatDay);

@@ -11,7 +11,7 @@ It reuses the app built for the CST Silver Jubilee Departmental Football Tournam
 
 | | |
 |---|---|
-| Teams | 10, in Group A (GCBS FC, Star Bro Veteran FC, CST Veteran, PSB Traders, Phuenthrom Legends Veteran) and Group B (Doors Rhino Veterans FC, Jaigaon Veterans, Gomtu Veterans FC, Samtse Veteran FC, Rinpung United) |
+| Teams | 10, in Group A (BSB Veteran FC, Star Bro Veteran FC, CST Veteran, PSB Traders, Phuenthrom Legends Veteran) and Group B (Doors Rhino Veterans FC, Jaigaon Veterans, Gomtu Veterans FC, Samtse Veteran FC, Rinpung United) |
 | Group stage | Single round-robin, matches 1–20; win 3, draw 1, loss 0; order: points → goal difference → goals scored → admin override (head-to-head or lots) |
 | Knockouts | SF1 (21): Winner A v Runner-up B · SF2 (22): Winner B v Runner-up A · Final (23). No 3rd place match |
 | Knockout draw | Admin chooses: extra time (any length) or straight to penalties |
@@ -159,7 +159,7 @@ DEPLOY.md, section 4: the site loads with two groups and the semi-finals/Final, 
 
 ## Team logos
 
-Put each team's logo in **`design/team-logos-raw/`**, named after the team: its official name as in the fixtures file (any case, e.g. `Jaigaon Veterans.png`, `GCBS FC.jpg`) or its code (`JGV.png`, `GCB.jpg`). PNG, JPG, WebP or SVG; the bigger and cleaner the better (a transparent or plain background works best). Then:
+Put each team's logo in **`design/team-logos-raw/`**, named after the team: its official name as in the fixtures file (any case, e.g. `Jaigaon Veterans.png`, `BSB Veteran FC.jpg`) or its code (`JGV.png`, `GCB.jpg`). PNG, JPG, WebP or SVG; the bigger and cleaner the better (a transparent or plain background works best). Then:
 
 ```bash
 npm run logos     # writes public/teams/<CODE>.webp and src/data/team-logos.ts; prints a report

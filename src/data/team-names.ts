@@ -10,7 +10,7 @@
  */
 export const TEAM_NAMES: Record<string, { short: string; sub?: string }> = {
   // Group A
-  GCB: { short: "GCBS FC" },
+  GCB: { short: "BSB Veteran FC" }, // listed as "GCBS FC" in the fixtures file; renamed 24 Nov 2026
   SBV: { short: "Star Bro", sub: "Star Bro Veteran FC" },
   CSV: { short: "CST Veteran" },
   PSB: { short: "PSB Traders" },

@@ -1615,7 +1615,7 @@ export function computeDiscipline(matches: Match[], events: MatchEvent[], rules:
   return { cards, pending: [...pendingByPlayer.values()], suspendedIn, oneYellowAway, unattributed };
 }
 
-/** "Sent off vs GCBS FC, 19 Oct", "Sent off (second yellow) vs …", "Second yellow card of the tournament vs …". */
+/** "Sent off vs BSB Veteran FC, 19 Oct", "Sent off (second yellow) vs …", "Second yellow card of the tournament vs …". */
 export function banReason(ban: Ban, matchesById: Map<number, Match>, opponentName: (teamId: number | null) => string, day: (iso: string) => string): string {
   const m = matchesById.get(ban.fromMatchId);
   const vs = m ? ` vs ${opponentName(m.home_team_id === ban.teamId ? m.away_team_id : m.home_team_id)}, ${day(m.kickoff_at)}` : "";
