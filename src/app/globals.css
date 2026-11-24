@@ -41,6 +41,8 @@
 
   --nav-height: 4rem;
   --ticker-height: 34px;
+  /* Extra lift for things floating above the tab bar while the announcements ticker shows. */
+  --ticker-offset: 0px;
 }
 
 /* Dark mode, prepared but not switched on yet (dark mode is out of scope for now): setting
@@ -205,4 +207,9 @@ body {
     animation: none;
     transform: none;
   }
+}
+
+/* The announcements ticker is on screen: floating things (the pinned score) sit above it too. */
+html:has(#notice-ticker) {
+  --ticker-offset: var(--ticker-height);
 }

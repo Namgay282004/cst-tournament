@@ -4,6 +4,7 @@ import { BottomNav } from "@/components/bottom-nav";
 import { IntroGate } from "@/components/intro/intro-gate";
 import { MatchSheetProvider } from "@/components/match-sheet/match-sheet";
 import { NoticeTicker } from "@/components/notice-ticker";
+import { PinnedScore } from "@/components/pinned-score";
 import { PageSkeleton } from "@/components/skeletons";
 import { TournamentData } from "@/components/tournament-data";
 
@@ -34,6 +35,8 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             </main>
             {/* Organisers' notices (schedule changes and the like), live: a ticker above the tab bar. */}
             <NoticeTicker />
+            {/* A match the fan pinned: a small floating scoreboard above the tab bar. */}
+            <PinnedScore />
             <BottomNav />
           </MatchSheetProvider>
         </TournamentData>

@@ -33,6 +33,7 @@ import { wasLabel } from "../schedule-note";
 import { isAbandoned } from "@/lib/tournament";
 import { continuesLabel, stoppageLabel } from "../stoppage-note";
 import { VENUE } from "@/lib/brand";
+import { PinButton } from "../pinned-score";
 
 /** One match detail sheet for the public pages; any match opens it via useMatchSheet(). */
 export function MatchSheetProvider({ children }: { children: React.ReactNode }) {
@@ -119,6 +120,11 @@ function MatchDetail({ match, onLeave }: { match: Match; onLeave: () => void }) 
       {cardNote(match) && <p className="mt-1 text-center text-sm font-semibold text-muted tabular">{cardNote(match)}</p>}
       <ShootoutCircles match={match} className="mx-auto mt-3 max-w-xs" />
       <ScorerColumns events={eventsForMatch(match, events, playersById, teamsById)} className="mt-4" />
+
+      {/* Keep this match on screen as a small floating scoreboard while browsing. */}
+      <div className="mt-4 flex justify-center">
+        <PinButton match={match} />
+      </div>
 
       <div role="tablist" aria-label="Match details" className="mt-5 grid grid-cols-2 gap-1 rounded-xl bg-bg p-1 ring-1 ring-border">
         {(["summary", "players"] as const).map((t) => (

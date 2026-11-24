@@ -148,3 +148,18 @@ export function CloseIcon({ className = "size-4" }: IconProps) {
     </svg>
   );
 }
+
+/** A pushpin: "pin this score to the screen". `filled` when pinned. */
+export function PinIcon({ className = "size-4", filled = false }: IconProps & { filled?: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
+      <path
+        d="M10.2 1.8l4 4-1.4.6-2.6 2.6.3 3.2-1.2 1.2-2.6-2.6L3 14.5l-.5-.5 3.7-3.7-2.6-2.6 1.2-1.2 3.2.3L10.6 4.2z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

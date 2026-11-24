@@ -44,6 +44,7 @@ export function NoticeTicker() {
       {/* Room at the bottom of the page so the last item scrolls fully above the bar. */}
       <div aria-hidden="true" className="h-[var(--ticker-height)]" />
       <section
+        id="notice-ticker"
         aria-label="Announcements"
         className="fixed inset-x-0 bottom-[calc(var(--nav-height)+env(safe-area-inset-bottom)+1px)] z-30 bg-brand text-white"
       >

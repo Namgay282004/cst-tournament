@@ -9,6 +9,7 @@ export const TEAM_LOGOS: Readonly<Record<string, string>> = {
   "PLV": "9e5c7c9199",
   "DRV": "961637523f",
   "JGV": "45677bd7c8",
+  "GMV": "671c02fba2",
   "SMV": "0d97de9c99",
   "RPU": "05ec83b3c6",
 };
