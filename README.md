@@ -159,7 +159,7 @@ DEPLOY.md, section 4: the site loads with two groups and the semi-finals/Final, 
 
 ## Team logos
 
-Put each team's logo in **`design/team-logos-raw/`**, named after the team: its official name as in the fixtures file (any case, e.g. `Jaigaon Veterans.png`, `BSB Veteran FC.jpg`) or its code (`JGV.png`, `GCB.jpg`). PNG, JPG, WebP or SVG; the bigger and cleaner the better (a transparent or plain background works best). Then:
+Put each team's logo in **`design/team-logos-raw/`**, named after the team: its official name as in the fixtures file (any case, e.g. `Jaigaon Veterans.png`, `Rinpung United.jpg`) or its code (`JGV.png`, `GCB.jpg`). PNG, JPG, WebP or SVG; the bigger and cleaner the better (a transparent or plain background works best). Then:
 
 ```bash
 npm run logos     # writes public/teams/<CODE>.webp and src/data/team-logos.ts; prints a report

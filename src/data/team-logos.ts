@@ -2,7 +2,7 @@
 // Teams with a logo at public/teams/<CODE>.webp, with a content hash for cache-busting.
 // Teams not listed show their code badge.
 export const TEAM_LOGOS: Readonly<Record<string, string>> = {
-  "GCB": "f88221738b",
+  "GCB": "cec21cd9cd",
   "SBV": "5bfe6e084c",
   "CSV": "cc7c653112",
   "PSB": "c41c22d5da",
